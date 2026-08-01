@@ -24,22 +24,38 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import io.debridtv.app.BuildConfig
 import io.debridtv.app.di.ServiceLocator
 import io.debridtv.app.ui.Routes
 import io.debridtv.app.ui.components.TvButton
 import io.debridtv.app.ui.components.TvOutlinedButton
+import io.debridtv.app.update.UpdateInfo
+import io.debridtv.app.update.UpdateManager
 import kotlinx.coroutines.launch
+
+/** UI state for the "Check for updates" flow. */
+private sealed interface UpdateUi {
+    data object Idle : UpdateUi
+    data object Checking : UpdateUi
+    data object UpToDate : UpdateUi
+    data class Available(val info: UpdateInfo) : UpdateUi
+    data class Downloading(val pct: Int) : UpdateUi
+    data class Failed(val message: String) : UpdateUi
+}
 
 @Composable
 fun SettingsScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val storedKey by ServiceLocator.settings.apiKey.collectAsState(initial = null)
     val preferSurround by ServiceLocator.settings.preferSurround.collectAsState(initial = true)
     var field by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
     var checking by remember { mutableStateOf(false) }
+    var update by remember { mutableStateOf<UpdateUi>(UpdateUi.Idle) }
 
     BackHandler { nav.popBackStack() }
 
@@ -124,6 +140,85 @@ fun SettingsScreen(nav: NavHostController) {
                     onCheckedChange = { scope.launch { ServiceLocator.settings.setPreferSurround(it) } },
                     modifier = Modifier.padding(start = 16.dp)
                 )
+            }
+
+            // ---- Updates ----------------------------------------------------
+            Column(Modifier.fillMaxWidth().padding(top = 32.dp)) {
+                Text("Updates", style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground)
+                Text(
+                    "Current version ${BuildConfig.VERSION_NAME}. Updates come from GitHub Releases.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+
+                val u = update
+                Row(
+                    Modifier.padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    TvButton(
+                        enabled = u !is UpdateUi.Checking && u !is UpdateUi.Downloading,
+                        onClick = {
+                            scope.launch {
+                                update = UpdateUi.Checking
+                                update = runCatching { UpdateManager.check() }.fold(
+                                    onSuccess = { info ->
+                                        if (info == null) UpdateUi.UpToDate else UpdateUi.Available(info)
+                                    },
+                                    onFailure = { UpdateUi.Failed(it.message ?: "Check failed") }
+                                )
+                            }
+                        }
+                    ) {
+                        Text(
+                            when (u) {
+                                is UpdateUi.Checking -> "Checking…"
+                                is UpdateUi.Downloading -> "Downloading ${u.pct}%"
+                                else -> "Check for updates"
+                            }
+                        )
+                    }
+
+                    if (u is UpdateUi.Available) {
+                        TvButton(onClick = {
+                            scope.launch {
+                                update = UpdateUi.Downloading(0)
+                                runCatching {
+                                    val file = UpdateManager.download(context, u.info) { pct ->
+                                        update = UpdateUi.Downloading(pct)
+                                    }
+                                    UpdateManager.install(context, file)
+                                }.onFailure {
+                                    update = UpdateUi.Failed(it.message ?: "Download failed")
+                                }.onSuccess {
+                                    // Hand-off to the system installer; keep the button
+                                    // available in case the user backs out of it.
+                                    update = UpdateUi.Available(u.info)
+                                }
+                            }
+                        }) { Text("Install ${u.info.versionName}") }
+                    }
+                }
+
+                val status = when (val s = update) {
+                    is UpdateUi.UpToDate -> "You're on the latest version."
+                    is UpdateUi.Available -> "Update available: ${s.info.versionName}"
+                    is UpdateUi.Downloading -> "Downloading update… ${s.pct}%"
+                    is UpdateUi.Failed -> "Couldn't update: ${s.message}"
+                    else -> null
+                }
+                status?.let {
+                    Text(it, color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 12.dp))
+                }
+                (update as? UpdateUi.Available)?.info?.notes?.takeIf { it.isNotBlank() }?.let { notes ->
+                    Text(notes, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp))
+                }
             }
         }
     }

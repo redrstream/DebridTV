@@ -19,6 +19,7 @@
 # Keep all of our model/domain classes and their members (serialized by name).
 -keep class io.debridtv.app.domain.** { *; }
 -keep class io.debridtv.app.data.** { *; }
+-keep class io.debridtv.app.update.** { *; }
 # Enum handling for serialization.
 -keepclassmembers enum io.debridtv.app.** {
     public static **[] values();
