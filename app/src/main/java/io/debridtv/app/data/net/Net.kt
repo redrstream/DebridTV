@@ -4,12 +4,15 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.Cache
 import okhttp3.HttpUrl
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import java.io.File
@@ -55,6 +58,35 @@ object Net {
     }
 
     private val plainClient: OkHttpClient by lazy { baseClient().build() }
+
+    // Short-timeout client for cheaply probing whether a stream link is actually serving
+    // bytes yet (a freshly-cached AllDebrid magnet reports Ready before its CDN edge can
+    // stream). Kept separate so a cold edge fails fast instead of hanging on the long
+    // read timeout the API clients use.
+    private val probeClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(8, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .build()
+    }
+
+    /**
+     * True when [url] is actually streamable right now — one tiny ranged GET for the first
+     * couple of bytes. Used to wait out a just-cached source only as long as it genuinely
+     * needs, instead of a blind fixed delay. Any failure (cold edge, HTTP error, timeout)
+     * returns false so the caller retries.
+     */
+    suspend fun isStreamServable(url: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder().url(url).header("Range", "bytes=0-1").get().build()
+            probeClient.newCall(req).execute().use { resp ->
+                resp.isSuccessful && (resp.body?.byteStream()?.read() ?: -1) >= 0
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     fun retrofit(baseUrl: String, withLogging: Boolean = true): Retrofit =
         Retrofit.Builder()

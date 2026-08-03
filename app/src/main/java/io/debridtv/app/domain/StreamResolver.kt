@@ -4,6 +4,8 @@ import io.debridtv.app.data.alldebrid.AllDebridClient
 import io.debridtv.app.data.alldebrid.AllDebridException
 import io.debridtv.app.data.alldebrid.FileNode
 import io.debridtv.app.data.alldebrid.MagnetInfo
+import io.debridtv.app.data.net.Net
+import kotlinx.coroutines.delay
 
 /**
  * Turns a scraped [StreamSource] into a directly playable URL:
@@ -26,7 +28,27 @@ class StreamResolver(private val ad: AllDebridClient) {
 
         onProgress("Unlocking stream…")
         val url = ad.unlock(file.l!!)
+        waitUntilServable(url, onProgress)
         return ResolvedStream(url = url, filename = file.n ?: source.filename, magnetId = id)
+    }
+
+    /**
+     * A magnet reports Ready the instant its download finishes, but the CDN often can't
+     * stream it for a few more seconds — handing the link to the player too early causes a
+     * load-stall-load cycle. Probe the actual link and return the MOMENT it serves bytes,
+     * waiting only as long as genuinely needed (capped). An already-servable link (cached
+     * source, Library, re-unlock retry) clears the first probe in ~1 request, so there's no
+     * fixed penalty. If it never becomes servable within the cap we return anyway and let the
+     * player's retry/fallback handle it.
+     */
+    private suspend fun waitUntilServable(url: String, onProgress: (String) -> Unit) {
+        var waited = 0L
+        while (waited < PROBE_MAX_WAIT_MS) {
+            if (Net.isStreamServable(url)) return
+            onProgress("Preparing stream…")
+            delay(PROBE_INTERVAL_MS)
+            waited += PROBE_INTERVAL_MS
+        }
     }
 
     /** Kick off caching without waiting for it to finish (auto-queue for later). */
@@ -89,5 +111,10 @@ class StreamResolver(private val ad: AllDebridClient) {
 
     private companion object {
         val VIDEO_EXT = listOf(".mkv", ".mp4", ".avi", ".m4v", ".mov", ".ts", ".webm", ".wmv", ".flv")
+
+        // How long to wait for a just-cached link to become streamable, and how often to
+        // re-probe. Returns as soon as it's servable, so these are only an upper bound.
+        const val PROBE_MAX_WAIT_MS = 20_000L
+        const val PROBE_INTERVAL_MS = 2_000L
     }
 }
