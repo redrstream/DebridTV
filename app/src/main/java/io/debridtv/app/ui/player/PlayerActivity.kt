@@ -206,16 +206,17 @@ class PlayerActivity : ComponentActivity() {
         val renderersFactory = DefaultRenderersFactory(this)
             .setEnableDecoderFallback(true)
 
-        // Start playback on a fatter cushion than the 2.5s default. A source that's still
-        // warming can start on a thin buffer, drain it, and stall almost immediately (the
-        // load-stop-load cycle). Requiring ~10s buffered to begin and ~15s to resume after a
-        // rebuffer trades a slightly longer initial "Buffering…" for far fewer mid-play hitches.
-        // Total buffer stays at the ~50s default (safe on cheap TV boxes; no OOM risk).
+        // Keep the START fast (5s, only a touch above the 2.5s default) — the resolver's
+        // servable-probe already guarantees the link is streaming before we hit play, so the
+        // initial buffer doesn't need to carry the safety burden. Put the cushion on the
+        // RESUME-after-a-stall path (15s) instead: that only runs once a hitch has already
+        // happened, so it doesn't slow a healthy start, and resuming on a real cushion rather
+        // than a sliver is what breaks the load-stop-load loop. Total buffer stays ~50s.
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 DefaultLoadControl.DEFAULT_MIN_BUFFER_MS,
                 DefaultLoadControl.DEFAULT_MAX_BUFFER_MS,
-                10_000,
+                5_000,
                 15_000
             )
             .build()
