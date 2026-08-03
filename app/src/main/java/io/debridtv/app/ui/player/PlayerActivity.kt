@@ -211,17 +211,15 @@ class PlayerActivity : ComponentActivity() {
 
         exo.addListener(object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                // Transient load errors (source still caching / a warming CDN edge) deserve
-                // a couple of retries on the SAME source before we jump to another. Codec/
-                // format errors won't fix themselves on retry, so those fall straight through.
-                if (isTransient(error) && currentRetries < maxSourceRetries) {
-                    currentRetries++
-                    statusText.visibility = View.VISIBLE
-                    statusText.text = "Buffering…"
-                    handler.removeCallbacks(retrySource)
-                    handler.postDelayed(retrySource, retryDelayMs)
+                // Codec/format errors are inherent to the file — retrying won't help, so
+                // switch sources immediately. Everything else (IO, parsing, a source still
+                // settling / a warming CDN edge) gets the patient in-place retry first.
+                if (!isTransient(error)) {
+                    val next = nextUntriedIndex()
+                    if (next != null) fallbackTo(next) else showError(error)
                     return
                 }
+                if (retryCurrent()) return
                 val next = nextUntriedIndex()
                 if (next != null) fallbackTo(next) else showError(error)
             }
@@ -253,6 +251,23 @@ class PlayerActivity : ComponentActivity() {
         exo.playWhenReady = true
         handler.postDelayed(saveTick, 10_000)
         handler.postDelayed(stallCheck, 10_000)
+    }
+
+    /**
+     * Give the CURRENT (user-picked) source another in-place re-unlock instead of jumping to
+     * a different source. Shared by BOTH switch-away mechanisms — a hard error ("bad source",
+     * onPlayerError) and the stall watchdog ("too slow", checkStall) — so neither can abandon
+     * the pick prematurely, which would only spawn a competing AllDebrid download. Returns
+     * false when the retry budget is spent and the caller should fall back to another source.
+     */
+    private fun retryCurrent(): Boolean {
+        if (currentRetries >= maxSourceRetries) return false
+        currentRetries++
+        statusText.visibility = View.VISIBLE
+        statusText.text = "Buffering…"
+        handler.removeCallbacks(retrySource)
+        handler.postDelayed(retrySource, retryDelayMs)
+        return true
     }
 
     /**
@@ -315,6 +330,11 @@ class PlayerActivity : ComponentActivity() {
             val progressed = posHistory.last() - posHistory.first()  // content gained over ~30s wall
             if (progressed < 12_000) {  // under ~12s of video in 30s — can't keep up
                 posHistory.clear()
+                // "Too slow" is usually a freshly-completed source still settling on the CDN,
+                // not a genuinely bad one — so re-unlock the SAME source (a fresh link may hit
+                // a warmer edge) rather than switching, which would spawn a competing download.
+                // Only once the shared patience budget is spent do we try a different source.
+                if (retryCurrent()) return
                 val next = nextUntriedIndex()
                 if (next != null) {
                     fallbackTo(next, "Source too slow — switching…")
