@@ -14,6 +14,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.annotation.OptIn
 import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -25,6 +26,9 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.source.SingleSampleMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.PlayerView
 import io.debridtv.app.R
@@ -60,6 +64,7 @@ class PlayerActivity : ComponentActivity() {
     private var preferSurround: Boolean = true
     private var subtitleUrls: List<String> = emptyList()
     private var subtitleLangs: List<String> = emptyList()
+    private var dataSourceFactory: DefaultDataSource.Factory? = null
 
     // Ranked candidate sources for the current title, so a dead/broken source can
     // fall back to the next one without kicking the user back to the source list.
@@ -196,7 +201,7 @@ class PlayerActivity : ComponentActivity() {
 
     private fun initPlayer() {
         if (player != null) return
-        diag("start #$currentIndex ${(srcNames.getOrNull(currentIndex) ?: title).take(40)}")
+        diag("start #$currentIndex subs=${subtitleUrls.count { it.isNotBlank() }} ${(srcNames.getOrNull(currentIndex) ?: title).take(34)}")
 
         val trackSelector = DefaultTrackSelector(this).apply {
             parameters = buildUponParameters()
@@ -214,7 +219,9 @@ class PlayerActivity : ComponentActivity() {
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(15_000)
-        val mediaSourceFactory = DefaultMediaSourceFactory(DefaultDataSource.Factory(this, httpFactory))
+        val dsFactory = DefaultDataSource.Factory(this, httpFactory)
+        dataSourceFactory = dsFactory
+        val mediaSourceFactory = DefaultMediaSourceFactory(dsFactory)
 
         // Decoder fallback: if a specialised decoder can't handle a stream (e.g. a
         // Dolby Vision Profile 7 remux, which Android TVs like the Hisense U78QG
@@ -289,7 +296,7 @@ class PlayerActivity : ComponentActivity() {
             }
         })
 
-        exo.setMediaItem(buildMediaItem())
+        exo.setMediaSource(buildMediaSource())
         exo.prepare()
         if (startMs > 5_000) exo.seekTo(startMs)
         exo.playWhenReady = true
@@ -348,7 +355,7 @@ class PlayerActivity : ComponentActivity() {
             }
             val pl = player ?: return@launch
             statusText.text = "Buffering…"
-            pl.setMediaItem(buildMediaItem())
+            pl.setMediaSource(buildMediaSource())
             pl.prepare()
             if (resumeAt > 5_000) pl.seekTo(resumeAt)
             pl.playWhenReady = true
@@ -437,7 +444,7 @@ class PlayerActivity : ComponentActivity() {
                 val p = player ?: return@launch
                 url = resolved.url
                 statusText.visibility = View.GONE
-                p.setMediaItem(buildMediaItem())
+                p.setMediaSource(buildMediaSource())
                 p.prepare()
                 if (resumeAt > 5_000) p.seekTo(resumeAt)
                 p.playWhenReady = true
@@ -523,7 +530,7 @@ class PlayerActivity : ComponentActivity() {
                 subtitleLangs = subs.map { it.lang }
                 advancing = false
                 statusText.visibility = View.GONE
-                p.setMediaItem(buildMediaItem())
+                p.setMediaSource(buildMediaSource())
                 p.prepare()
                 p.playWhenReady = true
             } catch (e: Exception) {
@@ -564,20 +571,35 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
-    private fun buildMediaItem(): MediaItem {
-        val subs = subtitleUrls.mapIndexedNotNull { i, u ->
+    /**
+     * Build the media source for the current [url] plus any sideloaded subtitles.
+     *
+     * CRUCIAL: each subtitle is merged as its own SingleSampleMediaSource with
+     * treatLoadErrorsAsEndOfStream(true), so a bad/expired/rate-limited subtitle URL can
+     * NEVER take playback down with it. Attaching subtitles via MediaItem.SubtitleConfiguration
+     * (the previous approach) made a subtitle load error fatal — which is exactly why the SAME
+     * source played fine from the Library (no subtitles attached) but load-stop-looped from the
+     * Detail Play button (subtitles attached): the sub failed, the player errored, we re-resolved
+     * the same source with the same broken sub, and looped forever.
+     */
+    private fun buildMediaSource(): MediaSource {
+        val ds = dataSourceFactory ?: DefaultDataSource.Factory(this, DefaultHttpDataSource.Factory())
+        val videoSource = DefaultMediaSourceFactory(ds)
+            .createMediaSource(MediaItem.fromUri(url))
+        val subSources = subtitleUrls.mapIndexedNotNull { i, u ->
             if (u.isBlank()) return@mapIndexedNotNull null
             val mime = if (u.endsWith(".vtt", ignoreCase = true))
                 MimeTypes.TEXT_VTT else MimeTypes.APPLICATION_SUBRIP
-            MediaItem.SubtitleConfiguration.Builder(Uri.parse(u))
+            val cfg = MediaItem.SubtitleConfiguration.Builder(Uri.parse(u))
                 .setMimeType(mime)
                 .setLanguage(subtitleLangs.getOrNull(i) ?: "und")
                 .build()
+            SingleSampleMediaSource.Factory(ds)
+                .setTreatLoadErrorsAsEndOfStream(true)
+                .createMediaSource(cfg, C.TIME_UNSET)
         }
-        return MediaItem.Builder()
-            .setUri(url)
-            .setSubtitleConfigurations(subs)
-            .build()
+        return if (subSources.isEmpty()) videoSource
+        else MergingMediaSource(videoSource, *subSources.toTypedArray())
     }
 
     private fun saveProgress() {
