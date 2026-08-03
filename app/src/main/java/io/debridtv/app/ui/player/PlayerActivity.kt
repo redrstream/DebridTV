@@ -41,6 +41,7 @@ class PlayerActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
     private lateinit var playerView: PlayerView
     private lateinit var statusText: TextView
+    private lateinit var diagText: TextView
     private lateinit var errorPanel: LinearLayout
     private lateinit var errorText: TextView
     private lateinit var errorBackBtn: Button
@@ -89,6 +90,20 @@ class PlayerActivity : ComponentActivity() {
     // legible without adb: an error code ("bad source") vs "slow" (the stall watchdog).
     private var lastTrigger = ""
 
+    // Persistent on-screen diagnostic log: the last several player events (source starts, error
+    // codes, retries, switches, stalls) kept visible so a real-TV test is legible without adb.
+    // The flashing status text was too brief to read; this stays put so it can be photographed.
+    private val diagLog = ArrayDeque<String>()
+    private var diagStart = 0L
+    private fun diag(msg: String) {
+        if (diagStart == 0L) diagStart = android.os.SystemClock.uptimeMillis()
+        val t = (android.os.SystemClock.uptimeMillis() - diagStart) / 1000
+        diagLog.addLast("+${t}s  $msg")
+        while (diagLog.size > 10) diagLog.removeFirst()
+        diagText.text = diagLog.joinToString("\n")
+        diagText.visibility = View.VISIBLE
+    }
+
     // Series binge state: the episodes queued after the current one, plus what we
     // need to scrape + resolve them when the current episode finishes.
     private var imdbId: String = ""
@@ -124,6 +139,7 @@ class PlayerActivity : ComponentActivity() {
         setContentView(R.layout.activity_player)
         playerView = findViewById(R.id.player_view)
         statusText = findViewById(R.id.status_text)
+        diagText = findViewById(R.id.diag_text)
         errorPanel = findViewById(R.id.error_panel)
         errorText = findViewById(R.id.error_text)
         errorBackBtn = findViewById(R.id.error_back_btn)
@@ -180,6 +196,7 @@ class PlayerActivity : ComponentActivity() {
 
     private fun initPlayer() {
         if (player != null) return
+        diag("start #$currentIndex ${(srcNames.getOrNull(currentIndex) ?: title).take(40)}")
 
         val trackSelector = DefaultTrackSelector(this).apply {
             parameters = buildUponParameters()
@@ -235,6 +252,7 @@ class PlayerActivity : ComponentActivity() {
                 // switch sources immediately. Everything else (IO, parsing, a source still
                 // settling / a warming CDN edge) gets the patient in-place retry first.
                 lastTrigger = error.errorCodeName
+                diag("ERR ${error.errorCodeName} transient=${isTransient(error)}")
                 if (!isTransient(error)) {
                     val next = nextUntriedIndex()
                     if (next != null) fallbackTo(next, "Switching (${error.errorCodeName})…") else showError(error)
@@ -249,6 +267,11 @@ class PlayerActivity : ComponentActivity() {
                 // Playback actually started — reset the retry budget so a later hiccup
                 // deeper into the stream gets its own fresh set of retries.
                 if (state == Player.STATE_READY) currentRetries = 0
+                when (state) {
+                    Player.STATE_READY -> diag("playing")
+                    Player.STATE_ENDED -> diag("ended")
+                    Player.STATE_IDLE -> diag("idle")
+                }
                 if (!advancing) {
                     statusText.visibility = if (state == Player.STATE_BUFFERING) View.VISIBLE else View.GONE
                     if (state == Player.STATE_BUFFERING) statusText.text = "Buffering…"
@@ -284,6 +307,7 @@ class PlayerActivity : ComponentActivity() {
     private fun retryCurrent(): Boolean {
         if (currentRetries >= maxSourceRetries) return false
         currentRetries++
+        diag("retry $currentRetries/$maxSourceRetries [$lastTrigger]")
         statusText.visibility = View.VISIBLE
         val why = lastTrigger.ifBlank { "buffering" }
         statusText.text = "Buffering… (retry $currentRetries/$maxSourceRetries · $why)"
@@ -303,6 +327,7 @@ class PlayerActivity : ComponentActivity() {
     private fun reprepareCurrent() {
         val p = player ?: return
         val resumeAt = (p.currentPosition).takeIf { it > 5_000 } ?: startMs
+        diag("re-unlock same #$currentIndex")
         statusText.visibility = View.VISIBLE
         statusText.text = "Reconnecting…"
         retryJob?.cancel()
@@ -353,6 +378,7 @@ class PlayerActivity : ComponentActivity() {
             if (progressed < 12_000) {  // under ~12s of video in 30s — can't keep up
                 posHistory.clear()
                 lastTrigger = "slow"
+                diag("stall ${progressed}ms/30s")
                 // "Too slow" is usually a freshly-completed source still settling on the CDN,
                 // not a genuinely bad one — so re-unlock the SAME source (a fresh link may hit
                 // a warmer edge) rather than switching, which would spawn a competing download.
@@ -386,6 +412,7 @@ class PlayerActivity : ComponentActivity() {
      * to the next, and only surfaces the error panel once every source is exhausted.
      */
     private fun fallbackTo(index: Int, statusMsg: String = "Source failed — trying another…") {
+        diag("switch → #$index ${(srcNames.getOrNull(index) ?: "?").take(34)}")
         currentIndex = index
         triedIndices.add(index)
         currentRetries = 0
@@ -415,10 +442,12 @@ class PlayerActivity : ComponentActivity() {
                 if (resumeAt > 5_000) p.seekTo(resumeAt)
                 p.playWhenReady = true
             } catch (e: Exception) {
+                diag("resolve fail: ${(e.message ?: e.javaClass.simpleName).take(30)}")
                 val next = nextUntriedIndex()
                 if (next != null) {
                     fallbackTo(next)
                 } else {
+                    diag("EXHAUSTED: no working source")
                     statusText.visibility = View.GONE
                     playerView.hideController()
                     playerView.useController = false
@@ -515,6 +544,7 @@ class PlayerActivity : ComponentActivity() {
      * a focused button back to the source list so another can be picked.
      */
     private fun showError(error: PlaybackException) {
+        diag("ERROR PANEL: ${error.errorCodeName}")
         statusText.visibility = View.GONE
         playerView.hideController()
         playerView.useController = false

@@ -24,6 +24,23 @@
         android:padding="16dp"
         android:visibility="gone" />
 
+    <!-- Diagnostic overlay: a persistent running log of player events (error codes, source
+         switches, stalls) so a real-TV test is legible without adb. Top-left, unobtrusive. -->
+    <TextView
+        android:id="@+id/diag_text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_margin="12dp"
+        android:background="#B3000000"
+        android:fontFamily="monospace"
+        android:textColor="#66FF66"
+        android:textSize="11sp"
+        android:lineSpacingMultiplier="1.1"
+        android:padding="8dp"
+        android:maxWidth="900dp"
+        android:visibility="gone" />
+
     <LinearLayout
         android:id="@+id/error_panel"
         android:layout_width="wrap_content"
