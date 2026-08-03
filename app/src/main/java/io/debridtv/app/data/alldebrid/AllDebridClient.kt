@@ -74,11 +74,20 @@ class AllDebridClient(
     /**
      * Adds the magnet (if not already present) and polls until AllDebrid reports
      * it Ready (statusCode 4). Cached magnets return almost immediately.
+     *
+     * [settleDelayMs]: a torrent that just finished downloading reports Ready the instant the
+     * download completes, but its file isn't reliably servable from AllDebrid's CDN for another
+     * few seconds — handing the link to the player too early causes a load-stall-load cycle
+     * (the reason a manual "back out and Play again" a few seconds later reliably works). So
+     * when we actually had to wait for a download, pause to let it settle before returning.
+     * Skipped entirely when the magnet was already cached (instant Ready), so the Library and
+     * in-place re-unlock retries stay snappy.
      */
     suspend fun ensureReady(
         magnetOrHash: String,
         timeoutMs: Long = 180_000,
         pollIntervalMs: Long = 3_000,
+        settleDelayMs: Long = 15_000,
         onProgress: (MagnetInfo) -> Unit = {}
     ): MagnetInfo {
         val uploaded = uploadMagnet(magnetOrHash)
@@ -86,6 +95,7 @@ class AllDebridClient(
 
         var elapsed = 0L
         var info = status(id)
+        val cachedInstantly = info.isReady
         onProgress(info)
         while (!info.isReady && elapsed < timeoutMs) {
             if (info.isError) throw AllDebridException("AllDebrid error: ${info.status ?: "unknown"}")
@@ -95,6 +105,7 @@ class AllDebridClient(
             onProgress(info)
         }
         if (!info.isReady) throw AllDebridException("Timed out waiting for AllDebrid to cache this source")
+        if (!cachedInstantly && settleDelayMs > 0) delay(settleDelayMs)
         return info
     }
 

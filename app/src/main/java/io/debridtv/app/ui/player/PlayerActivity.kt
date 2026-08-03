@@ -21,6 +21,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -84,6 +85,9 @@ class PlayerActivity : ComponentActivity() {
     private val retryDelayMs = 5_000L
     private val retrySource = Runnable { reprepareCurrent() }
     private var retryJob: Job? = null
+    // What last forced a retry/switch — surfaced in the on-screen status so a real-TV test is
+    // legible without adb: an error code ("bad source") vs "slow" (the stall watchdog).
+    private var lastTrigger = ""
 
     // Series binge state: the episodes queued after the current one, plus what we
     // need to scrape + resolve them when the current episode finishes.
@@ -202,9 +206,24 @@ class PlayerActivity : ComponentActivity() {
         val renderersFactory = DefaultRenderersFactory(this)
             .setEnableDecoderFallback(true)
 
+        // Start playback on a fatter cushion than the 2.5s default. A source that's still
+        // warming can start on a thin buffer, drain it, and stall almost immediately (the
+        // load-stop-load cycle). Requiring ~10s buffered to begin and ~15s to resume after a
+        // rebuffer trades a slightly longer initial "Buffering…" for far fewer mid-play hitches.
+        // Total buffer stays at the ~50s default (safe on cheap TV boxes; no OOM risk).
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                DefaultLoadControl.DEFAULT_MIN_BUFFER_MS,
+                DefaultLoadControl.DEFAULT_MAX_BUFFER_MS,
+                10_000,
+                15_000
+            )
+            .build()
+
         val exo = ExoPlayer.Builder(this, renderersFactory)
             .setTrackSelector(trackSelector)
             .setMediaSourceFactory(mediaSourceFactory)
+            .setLoadControl(loadControl)
             .build()
         player = exo
         playerView.player = exo
@@ -214,14 +233,15 @@ class PlayerActivity : ComponentActivity() {
                 // Codec/format errors are inherent to the file — retrying won't help, so
                 // switch sources immediately. Everything else (IO, parsing, a source still
                 // settling / a warming CDN edge) gets the patient in-place retry first.
+                lastTrigger = error.errorCodeName
                 if (!isTransient(error)) {
                     val next = nextUntriedIndex()
-                    if (next != null) fallbackTo(next) else showError(error)
+                    if (next != null) fallbackTo(next, "Switching (${error.errorCodeName})…") else showError(error)
                     return
                 }
                 if (retryCurrent()) return
                 val next = nextUntriedIndex()
-                if (next != null) fallbackTo(next) else showError(error)
+                if (next != null) fallbackTo(next, "Switching (${error.errorCodeName})…") else showError(error)
             }
 
             override fun onPlaybackStateChanged(state: Int) {
@@ -264,7 +284,8 @@ class PlayerActivity : ComponentActivity() {
         if (currentRetries >= maxSourceRetries) return false
         currentRetries++
         statusText.visibility = View.VISIBLE
-        statusText.text = "Buffering…"
+        val why = lastTrigger.ifBlank { "buffering" }
+        statusText.text = "Buffering… (retry $currentRetries/$maxSourceRetries · $why)"
         handler.removeCallbacks(retrySource)
         handler.postDelayed(retrySource, retryDelayMs)
         return true
@@ -330,6 +351,7 @@ class PlayerActivity : ComponentActivity() {
             val progressed = posHistory.last() - posHistory.first()  // content gained over ~30s wall
             if (progressed < 12_000) {  // under ~12s of video in 30s — can't keep up
                 posHistory.clear()
+                lastTrigger = "slow"
                 // "Too slow" is usually a freshly-completed source still settling on the CDN,
                 // not a genuinely bad one — so re-unlock the SAME source (a fresh link may hit
                 // a warmer edge) rather than switching, which would spawn a competing download.
