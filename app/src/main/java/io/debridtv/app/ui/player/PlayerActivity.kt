@@ -75,9 +75,10 @@ class PlayerActivity : ComponentActivity() {
     // the first connection often fails on an otherwise-good source — retrying the same
     // link after a short pause lets the edge warm instead of instantly switching sources.
     private var currentRetries = 0
-    private val maxSourceRetries = 2
-    private val retryDelayMs = 3_000L
+    private val maxSourceRetries = 3
+    private val retryDelayMs = 5_000L
     private val retrySource = Runnable { reprepareCurrent() }
+    private var retryJob: Job? = null
 
     // Series binge state: the episodes queued after the current one, plus what we
     // need to scrape + resolve them when the current episode finishes.
@@ -249,14 +250,42 @@ class PlayerActivity : ComponentActivity() {
         handler.postDelayed(stallCheck, 10_000)
     }
 
-    /** Re-prepare the current link after a transient error, giving the CDN edge time to warm. */
+    /**
+     * Retry the current source after a transient error. Crucially this RE-RESOLVES the
+     * source (a fresh AllDebrid unlock → a new CDN link) rather than re-preparing the same
+     * URL: AllDebrid hands back a link before its edge is warm, and that specific link can
+     * keep failing while a freshly-minted one routes to a warm edge. This mirrors what a
+     * manual "back → Play again" does (which is why that reliably works). If re-resolving
+     * throws, we fall back on the same URL we already have so a resolver blip isn't fatal.
+     */
     private fun reprepareCurrent() {
         val p = player ?: return
         val resumeAt = (p.currentPosition).takeIf { it > 5_000 } ?: startMs
-        p.setMediaItem(buildMediaItem())
-        p.prepare()
-        if (resumeAt > 5_000) p.seekTo(resumeAt)
-        p.playWhenReady = true
+        statusText.visibility = View.VISIBLE
+        statusText.text = "Reconnecting…"
+        retryJob?.cancel()
+        retryJob = lifecycleScope.launch {
+            try {
+                if (srcHashes.isNotEmpty() && currentIndex in srcHashes.indices) {
+                    val src = StreamSource(
+                        infoHash = srcHashes[currentIndex],
+                        fileIdx = srcFileIdx.getOrNull(currentIndex)?.takeIf { it >= 0 },
+                        filename = srcNames.getOrNull(currentIndex) ?: srcHashes[currentIndex],
+                        quality = "", sizeText = null, seeders = null, provider = null, rawTitle = ""
+                    )
+                    val hint = if (epSeason >= 0 && epEpisode >= 0) epSeason to epEpisode else null
+                    url = ServiceLocator.resolver.resolve(src, hint).url
+                }
+            } catch (_: Exception) {
+                // Keep the existing url and re-prepare it anyway — better than aborting the retry.
+            }
+            val pl = player ?: return@launch
+            statusText.text = "Buffering…"
+            pl.setMediaItem(buildMediaItem())
+            pl.prepare()
+            if (resumeAt > 5_000) pl.seekTo(resumeAt)
+            pl.playWhenReady = true
+        }
     }
 
     /** Whether an error is worth retrying on the same source (transient) vs. moving on. */
@@ -313,6 +342,7 @@ class PlayerActivity : ComponentActivity() {
         triedIndices.add(index)
         currentRetries = 0
         handler.removeCallbacks(retrySource)
+        retryJob?.cancel()
         posHistory.clear()
         val resumeAt = (player?.currentPosition ?: 0L).takeIf { it > 5_000 } ?: startMs
         errorPanel.visibility = View.GONE
@@ -374,6 +404,7 @@ class PlayerActivity : ComponentActivity() {
         advancing = true
         currentRetries = 0
         handler.removeCallbacks(retrySource)
+        retryJob?.cancel()
         posHistory.clear()
         upNextPanel.visibility = View.GONE
         errorPanel.visibility = View.GONE
@@ -493,6 +524,7 @@ class PlayerActivity : ComponentActivity() {
         handler.removeCallbacks(autoAdvance)
         handler.removeCallbacks(stallCheck)
         handler.removeCallbacks(retrySource)
+        retryJob?.cancel()
         fallbackJob?.cancel()
         advanceJob?.cancel()
         player?.release()
