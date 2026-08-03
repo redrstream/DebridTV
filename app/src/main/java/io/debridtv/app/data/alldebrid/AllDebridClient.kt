@@ -44,7 +44,11 @@ class AllDebridClient(
     suspend fun listMagnets(): List<MagnetInfo> {
         val res = api.allMagnets(auth())
         res.error?.let { throw AllDebridException(it.message.ifBlank { it.code }) }
-        return res.data?.magnets.orEmpty().sortedByDescending { it.id ?: 0 }
+        // Most-recently-finished first. completionDate is when the download actually
+        // completed (what the user thinks of as "most recent"); fall back to uploadDate,
+        // then id, since older/partial entries may not carry a completion timestamp.
+        return res.data?.magnets.orEmpty()
+            .sortedByDescending { it.completionDate ?: it.uploadDate ?: it.id ?: 0L }
     }
 
     /** Flattened list of downloadable files (folders recursed) for a ready magnet. */

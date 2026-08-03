@@ -70,12 +70,17 @@ class PlayerActivity : ComponentActivity() {
     private val triedIndices = mutableSetOf<Int>()
     private var fallbackJob: Job? = null
 
-    // Give the CURRENT source a few retries before writing it off. AllDebrid reports a
-    // magnet "Ready" and hands back a link before the CDN edge has finished warming, so
-    // the first connection often fails on an otherwise-good source — retrying the same
-    // link after a short pause lets the edge warm instead of instantly switching sources.
+    // Be VERY patient on the source the user actually picked before ever switching to a
+    // different one. AllDebrid reports a magnet "Ready" the instant its download finishes,
+    // but a just-completed file often isn't reliably servable from the CDN for another
+    // 20-40s. Falling back to a *different* source in that window is actively harmful — it
+    // uploads another magnet and starts another download, competing for bandwidth so
+    // nothing gets the few seconds it needs to settle. Instead we re-unlock the SAME source
+    // repeatedly (idempotent — no new download) for ~50s, which is what makes a manual
+    // "Play again" / opening it later from the Library reliably work. Only after this long
+    // grace do we treat the pick as genuinely dead and try another.
     private var currentRetries = 0
-    private val maxSourceRetries = 3
+    private val maxSourceRetries = 10
     private val retryDelayMs = 5_000L
     private val retrySource = Runnable { reprepareCurrent() }
     private var retryJob: Job? = null

@@ -124,7 +124,9 @@ data class MagnetInfo(
     val size: Long? = null,
     val downloaded: Long? = null,
     val seeders: Int? = null,
-    val downloadSpeed: Long? = null
+    val downloadSpeed: Long? = null,
+    val uploadDate: Long? = null,
+    val completionDate: Long? = null
 ) {
     val isReady: Boolean get() = statusCode == 4
     val isError: Boolean get() = (statusCode ?: 0) > 4
