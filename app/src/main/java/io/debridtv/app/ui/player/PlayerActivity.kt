@@ -45,7 +45,6 @@ class PlayerActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
     private lateinit var playerView: PlayerView
     private lateinit var statusText: TextView
-    private lateinit var diagText: TextView
     private lateinit var errorPanel: LinearLayout
     private lateinit var errorText: TextView
     private lateinit var errorBackBtn: Button
@@ -77,37 +76,20 @@ class PlayerActivity : ComponentActivity() {
     private val triedIndices = mutableSetOf<Int>()
     private var fallbackJob: Job? = null
 
-    // Be VERY patient on the source the user actually picked before ever switching to a
-    // different one. AllDebrid reports a magnet "Ready" the instant its download finishes,
-    // but a just-completed file often isn't reliably servable from the CDN for another
-    // 20-40s. Falling back to a *different* source in that window is actively harmful — it
-    // uploads another magnet and starts another download, competing for bandwidth so
-    // nothing gets the few seconds it needs to settle. Instead we re-unlock the SAME source
-    // repeatedly (idempotent — no new download) for ~50s, which is what makes a manual
-    // "Play again" / opening it later from the Library reliably work. Only after this long
-    // grace do we treat the pick as genuinely dead and try another.
+    // Prefer re-unlocking the source the user actually picked over switching to a different
+    // one. A re-unlock is idempotent (no new AllDebrid download), whereas falling back spawns
+    // a competing magnet, so a couple of quick same-source retries is the cheaper, better
+    // first move for a transient blip — e.g. an AllDebrid link handed back a beat before its
+    // CDN edge is warm. This used to be cranked to 10×5s (~50s) chasing what looked like a
+    // "source needs to settle" problem; the real cause of that load-stop-loop turned out to
+    // be a fatal subtitle load error (see buildMediaSource), so the long grace was tuned for
+    // a bug that no longer exists. A short budget covers the genuine cold-edge case; anything
+    // still failing after that is a dead source, so move on rather than making the user wait.
     private var currentRetries = 0
-    private val maxSourceRetries = 10
-    private val retryDelayMs = 5_000L
+    private val maxSourceRetries = 3
+    private val retryDelayMs = 3_000L
     private val retrySource = Runnable { reprepareCurrent() }
     private var retryJob: Job? = null
-    // What last forced a retry/switch — surfaced in the on-screen status so a real-TV test is
-    // legible without adb: an error code ("bad source") vs "slow" (the stall watchdog).
-    private var lastTrigger = ""
-
-    // Persistent on-screen diagnostic log: the last several player events (source starts, error
-    // codes, retries, switches, stalls) kept visible so a real-TV test is legible without adb.
-    // The flashing status text was too brief to read; this stays put so it can be photographed.
-    private val diagLog = ArrayDeque<String>()
-    private var diagStart = 0L
-    private fun diag(msg: String) {
-        if (diagStart == 0L) diagStart = android.os.SystemClock.uptimeMillis()
-        val t = (android.os.SystemClock.uptimeMillis() - diagStart) / 1000
-        diagLog.addLast("+${t}s  $msg")
-        while (diagLog.size > 10) diagLog.removeFirst()
-        diagText.text = diagLog.joinToString("\n")
-        diagText.visibility = View.VISIBLE
-    }
 
     // Series binge state: the episodes queued after the current one, plus what we
     // need to scrape + resolve them when the current episode finishes.
@@ -144,7 +126,6 @@ class PlayerActivity : ComponentActivity() {
         setContentView(R.layout.activity_player)
         playerView = findViewById(R.id.player_view)
         statusText = findViewById(R.id.status_text)
-        diagText = findViewById(R.id.diag_text)
         errorPanel = findViewById(R.id.error_panel)
         errorText = findViewById(R.id.error_text)
         errorBackBtn = findViewById(R.id.error_back_btn)
@@ -201,7 +182,6 @@ class PlayerActivity : ComponentActivity() {
 
     private fun initPlayer() {
         if (player != null) return
-        diag("start #$currentIndex subs=${subtitleUrls.count { it.isNotBlank() }} ${(srcNames.getOrNull(currentIndex) ?: title).take(34)}")
 
         val trackSelector = DefaultTrackSelector(this).apply {
             parameters = buildUponParameters()
@@ -232,16 +212,16 @@ class PlayerActivity : ComponentActivity() {
 
         // Keep the START fast (5s, only a touch above the 2.5s default) — the resolver's
         // servable-probe already guarantees the link is streaming before we hit play, so the
-        // initial buffer doesn't need to carry the safety burden. Put the cushion on the
-        // RESUME-after-a-stall path (15s) instead: that only runs once a hitch has already
-        // happened, so it doesn't slow a healthy start, and resuming on a real cushion rather
-        // than a sliver is what breaks the load-stop-load loop. Total buffer stays ~50s.
+        // initial buffer doesn't need to carry the safety burden. Put a modest cushion on the
+        // RESUME-after-a-stall path (7s) — enough to absorb a real hiccup without over-buffering,
+        // now that the load-stop-loop's actual cause (fatal subtitles) is fixed rather than
+        // papered over with a fat 15s rebuffer.
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 DefaultLoadControl.DEFAULT_MIN_BUFFER_MS,
                 DefaultLoadControl.DEFAULT_MAX_BUFFER_MS,
                 5_000,
-                15_000
+                7_000
             )
             .build()
 
@@ -258,8 +238,6 @@ class PlayerActivity : ComponentActivity() {
                 // Codec/format errors are inherent to the file — retrying won't help, so
                 // switch sources immediately. Everything else (IO, parsing, a source still
                 // settling / a warming CDN edge) gets the patient in-place retry first.
-                lastTrigger = error.errorCodeName
-                diag("ERR ${error.errorCodeName} transient=${isTransient(error)}")
                 if (!isTransient(error)) {
                     val next = nextUntriedIndex()
                     if (next != null) fallbackTo(next, "Switching (${error.errorCodeName})…") else showError(error)
@@ -274,11 +252,6 @@ class PlayerActivity : ComponentActivity() {
                 // Playback actually started — reset the retry budget so a later hiccup
                 // deeper into the stream gets its own fresh set of retries.
                 if (state == Player.STATE_READY) currentRetries = 0
-                when (state) {
-                    Player.STATE_READY -> diag("playing")
-                    Player.STATE_ENDED -> diag("ended")
-                    Player.STATE_IDLE -> diag("idle")
-                }
                 if (!advancing) {
                     statusText.visibility = if (state == Player.STATE_BUFFERING) View.VISIBLE else View.GONE
                     if (state == Player.STATE_BUFFERING) statusText.text = "Buffering…"
@@ -314,10 +287,8 @@ class PlayerActivity : ComponentActivity() {
     private fun retryCurrent(): Boolean {
         if (currentRetries >= maxSourceRetries) return false
         currentRetries++
-        diag("retry $currentRetries/$maxSourceRetries [$lastTrigger]")
         statusText.visibility = View.VISIBLE
-        val why = lastTrigger.ifBlank { "buffering" }
-        statusText.text = "Buffering… (retry $currentRetries/$maxSourceRetries · $why)"
+        statusText.text = "Buffering…"
         handler.removeCallbacks(retrySource)
         handler.postDelayed(retrySource, retryDelayMs)
         return true
@@ -334,7 +305,6 @@ class PlayerActivity : ComponentActivity() {
     private fun reprepareCurrent() {
         val p = player ?: return
         val resumeAt = (p.currentPosition).takeIf { it > 5_000 } ?: startMs
-        diag("re-unlock same #$currentIndex")
         statusText.visibility = View.VISIBLE
         statusText.text = "Reconnecting…"
         retryJob?.cancel()
@@ -384,8 +354,6 @@ class PlayerActivity : ComponentActivity() {
             val progressed = posHistory.last() - posHistory.first()  // content gained over ~30s wall
             if (progressed < 12_000) {  // under ~12s of video in 30s — can't keep up
                 posHistory.clear()
-                lastTrigger = "slow"
-                diag("stall ${progressed}ms/30s")
                 // "Too slow" is usually a freshly-completed source still settling on the CDN,
                 // not a genuinely bad one — so re-unlock the SAME source (a fresh link may hit
                 // a warmer edge) rather than switching, which would spawn a competing download.
@@ -419,7 +387,6 @@ class PlayerActivity : ComponentActivity() {
      * to the next, and only surfaces the error panel once every source is exhausted.
      */
     private fun fallbackTo(index: Int, statusMsg: String = "Source failed — trying another…") {
-        diag("switch → #$index ${(srcNames.getOrNull(index) ?: "?").take(34)}")
         currentIndex = index
         triedIndices.add(index)
         currentRetries = 0
@@ -449,12 +416,10 @@ class PlayerActivity : ComponentActivity() {
                 if (resumeAt > 5_000) p.seekTo(resumeAt)
                 p.playWhenReady = true
             } catch (e: Exception) {
-                diag("resolve fail: ${(e.message ?: e.javaClass.simpleName).take(30)}")
                 val next = nextUntriedIndex()
                 if (next != null) {
                     fallbackTo(next)
                 } else {
-                    diag("EXHAUSTED: no working source")
                     statusText.visibility = View.GONE
                     playerView.hideController()
                     playerView.useController = false
@@ -551,7 +516,6 @@ class PlayerActivity : ComponentActivity() {
      * a focused button back to the source list so another can be picked.
      */
     private fun showError(error: PlaybackException) {
-        diag("ERROR PANEL: ${error.errorCodeName}")
         statusText.visibility = View.GONE
         playerView.hideController()
         playerView.useController = false
