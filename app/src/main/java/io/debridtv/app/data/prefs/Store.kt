@@ -104,6 +104,19 @@ class HistoryStore(private val context: Context) {
     }
 
     /**
+     * Remove every entry for a show — the movie/show row itself ("tt123") and all
+     * of its episode rows ("tt123:season:episode"). Used when the user removes a
+     * collapsed series card from Continue Watching.
+     */
+    suspend fun removeShow(showId: String) {
+        context.dataStore.edit { prefs ->
+            val list = decode(prefs[KEY_HISTORY])
+                .filterNot { it.key == showId || it.key.startsWith("$showId:") }
+            prefs[KEY_HISTORY] = Net.json.encodeToString(serializer, list)
+        }
+    }
+
+    /**
      * Manually mark an episode/movie watched or unwatched. Marking watched keeps
      * any real playback position but flips the [HistoryEntry.watched] flag (and
      * bumps updatedAt so it becomes the "furthest" point). Unwatching drops the

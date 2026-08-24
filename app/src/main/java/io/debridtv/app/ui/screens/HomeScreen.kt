@@ -131,14 +131,40 @@ fun HomeScreen(nav: NavHostController) {
         }
     }
 
-    val cwEntries = history
-        .filterNot { it.isWatched }
-        .filter { it.progress > 0.02f }
-    // Use the full history key (tt123 or tt123:season:episode) as the card id so
-    // each entry is unique and we can deep-link back to the exact episode.
-    val cwCards = cwEntries.map {
-        CardItem(id = it.key, type = it.type, title = it.title, poster = it.poster)
+    // Build the Continue Watching row.
+    //  • Movies / Library (debrid) items map 1:1 from their entry, and only while
+    //    genuinely in progress (not finished/marked, >2% watched).
+    //  • Series COLLAPSE to one card per show: after you finish an episode the show
+    //    should stay here so you can jump to the NEXT episode. We key the card off
+    //    the show id and let DetailScreen's resume logic land on the right episode
+    //    (it already rolls forward past a finished episode). A show stays here as
+    //    long as it has any activity — an in-progress episode to resume, or a
+    //    finished one to advance past. (A fully-finished series lingers until you
+    //    long-press → Remove; detecting the finale would need a Cinemeta fetch.)
+    val cwList = remember(history) {
+        val out = mutableListOf<Triple<CardItem, Float, Long>>()
+        history.filter { it.type != "series" }
+            .filterNot { it.isWatched }
+            .filter { it.progress > 0.02f }
+            .forEach { e ->
+                out += Triple(CardItem(e.key, e.type, e.title, e.poster), e.progress, e.updatedAt)
+            }
+        history.filter { it.type == "series" }
+            .groupBy { it.key.substringBefore(":") }
+            .forEach { (showId, entries) ->
+                val latest = entries.maxByOrNull { it.updatedAt } ?: return@forEach
+                val resumable = !latest.isWatched && latest.progress > 0.02f
+                val showTitle = latest.title.substringBefore(" · ").ifBlank { latest.title }
+                out += Triple(
+                    CardItem(id = showId, type = "series", title = showTitle, poster = latest.poster),
+                    if (resumable) latest.progress else 0f,
+                    latest.updatedAt
+                )
+            }
+        out.sortedByDescending { it.third }
     }
+    val cwCards = cwList.map { it.first }
+    val cwProgress = cwList.associate { (it.first.type + it.first.id) to it.second }
 
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().padding(top = 20.dp)) {
@@ -159,20 +185,14 @@ fun HomeScreen(nav: NavHostController) {
                     MediaRow(
                         title = "Continue Watching",
                         items = cwCards,
-                        progressFor = { card -> cwEntries.firstOrNull { it.key == card.id }?.progress ?: 0f },
+                        progressFor = { card -> cwProgress[card.type + card.id] ?: 0f },
                         onLongClick = { card -> removeTarget = card },
                         onClick = { card ->
-                            if (card.type == "debrid") {
-                                playDebrid(card)
-                            } else {
-                                val parts = card.id.split(":")
-                                if (parts.size >= 3) {
-                                    nav.navigate(
-                                        Routes.detail(card.type, parts[0], parts[1].toIntOrNull(), parts[2].toIntOrNull())
-                                    )
-                                } else {
-                                    nav.navigate(Routes.detail(card.type, parts[0]))
-                                }
+                            when (card.type) {
+                                // Series cards carry the bare show id; DetailScreen's
+                                // resume logic drops us on the next episode to watch.
+                                "debrid" -> playDebrid(card)
+                                else -> nav.navigate(Routes.detail(card.type, card.id))
                             }
                         }
                     )
@@ -233,7 +253,12 @@ fun HomeScreen(nav: NavHostController) {
                 text = { Text(target.title) },
                 confirmButton = {
                     TvButton(onClick = {
-                        scope.launch { ServiceLocator.history.remove(target.id) }
+                        scope.launch {
+                            // Series cards represent a whole show (bare id), so clear
+                            // every episode entry; others remove their single entry.
+                            if (target.type == "series") ServiceLocator.history.removeShow(target.id)
+                            else ServiceLocator.history.remove(target.id)
+                        }
                         removeTarget = null
                     }) { Text("Remove") }
                 },
