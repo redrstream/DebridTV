@@ -102,10 +102,17 @@ class PlayerActivity : ComponentActivity() {
     private var advanceJob: Job? = null
     private var advancing = false
     private val autoAdvance = Runnable { playNextEpisode() }
+    // "Up next" is offered once per episode, in the last minute of playback (or at
+    // the true end as a fallback), then auto-advances after this countdown unless
+    // the user picks Play now / Cancel first.
+    private var upNextShown = false
+    private val upNextLeadMs = 60_000L
+    private val upNextAutoAdvanceMs = 20_000L
 
     private val saveTick = object : Runnable {
         override fun run() {
             saveProgress()
+            maybeOfferUpNext()
             handler.postDelayed(this, 10_000)
         }
     }
@@ -432,14 +439,31 @@ class PlayerActivity : ComponentActivity() {
     }
 
     /** Episode finished: show an "Up next" prompt that auto-advances after a few seconds. */
-    private fun offerNextEpisode() {
+    /**
+     * Show the "Up next" panel once we're within the last minute of the episode.
+     * Runs off the 10s save tick, so it fires at the first tick with under a minute
+     * left. The true-end [Player.STATE_ENDED] path is a fallback for short clips or a
+     * duration we didn't know in time.
+     */
+    private fun maybeOfferUpNext() {
+        if (upNextShown || advancing) return
         if (nextSeasons.isEmpty() || nextLabels.isEmpty()) return
+        val p = player ?: return
+        val dur = p.duration
+        if (dur <= 0) return
+        val remaining = dur - p.currentPosition
+        if (remaining in 0..upNextLeadMs) offerNextEpisode()
+    }
+
+    private fun offerNextEpisode() {
+        if (upNextShown || nextSeasons.isEmpty() || nextLabels.isEmpty()) return
+        upNextShown = true
         saveProgress()
         upNextText.text = "Up next: ${nextLabels.first()}"
         upNextPanel.visibility = View.VISIBLE
         upNextPlay.requestFocus()
         handler.removeCallbacks(autoAdvance)
-        handler.postDelayed(autoAdvance, 8_000)
+        handler.postDelayed(autoAdvance, upNextAutoAdvanceMs)
     }
 
     /** Scrape + resolve the next queued episode and swap it into the current player. */
@@ -452,6 +476,7 @@ class PlayerActivity : ComponentActivity() {
 
         advancing = true
         currentRetries = 0
+        upNextShown = false  // the new episode gets its own "Up next" offer
         handler.removeCallbacks(retrySource)
         retryJob?.cancel()
         posHistory.clear()
