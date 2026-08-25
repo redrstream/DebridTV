@@ -77,9 +77,6 @@ fun PosterCard(
     val focused by interaction.collectIsFocusedAsState()
     LaunchedEffect(focused) { onFocusChanged?.invoke(focused) }
 
-    // Tracks a fired long-press so the key-up that follows it is swallowed (otherwise
-    // the normal click would ALSO fire, opening the card right after removing it).
-    var longPressFired by remember { mutableStateOf(false) }
 
     // A modest, non-bouncy lift. dampingRatio 0.55 (underdamped) used to overshoot and
     // wobble; combined with center-origin scaling that made every card bob up AND down as
@@ -121,30 +118,23 @@ fun PosterCard(
                 .height(200.dp)
                 // Long-press to remove. Compose's combinedClickable(onLongClick=…) only
                 // fires from a TOUCH long-press — on a TV remote the D-pad center is a key
-                // event, so it never triggered. We detect the hold ourselves off the key
-                // event: Android auto-repeats a held DPAD_CENTER/Enter, so once the key has
-                // been down ~450ms (or the framework flags it a long-press) we fire
-                // onLongClick and consume the release so the tap-to-open doesn't also run.
+                // event, so it never triggered. We detect the hold ourselves: on the key
+                // RELEASE, if the center/Enter key was held past the threshold, fire
+                // onLongClick and consume the event so the normal tap-to-open doesn't run.
+                // Firing on release (not mid-hold) is deliberate — the Remove dialog opens
+                // only once the button is up, so the release can't land on the just-opened
+                // dialog and dismiss it (which is exactly what happened when we fired on the
+                // ACTION_DOWN: the dialog appeared, then the key-up closed it instantly).
                 .then(
                     if (onLongClick != null)
                         Modifier.onPreviewKeyEvent { ke ->
                             if (ke.key != Key.DirectionCenter && ke.key != Key.Enter && ke.key != Key.NumPadEnter)
                                 return@onPreviewKeyEvent false
                             val native = ke.nativeKeyEvent
-                            when (native.action) {
-                                android.view.KeyEvent.ACTION_DOWN -> {
-                                    val held = native.eventTime - native.downTime
-                                    if (!longPressFired && (native.isLongPress || held >= 450L)) {
-                                        longPressFired = true
-                                        onLongClick()
-                                        true
-                                    } else false
-                                }
-                                android.view.KeyEvent.ACTION_UP -> {
-                                    if (longPressFired) { longPressFired = false; true } else false
-                                }
-                                else -> false
-                            }
+                            if (native.action == android.view.KeyEvent.ACTION_UP) {
+                                val held = native.eventTime - native.downTime
+                                if (held >= 450L) { onLongClick(); true } else false
+                            } else false
                         }
                     else Modifier
                 )
