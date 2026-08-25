@@ -48,6 +48,13 @@
             android:id="@+id/error_back_btn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:background="@drawable/tv_button_bg"
+            android:textColor="@color/tv_button_text"
+            android:paddingLeft="24dp"
+            android:paddingRight="24dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp"
+            android:stateListAnimator="@null"
             android:text="Back to sources" />
 
     </LinearLayout>
@@ -82,13 +89,27 @@
                 android:id="@+id/upnext_cancel"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:background="@drawable/tv_button_bg"
+                android:textColor="@color/tv_button_text"
+                android:paddingLeft="24dp"
+                android:paddingRight="24dp"
+                android:paddingTop="12dp"
+                android:paddingBottom="12dp"
+                android:stateListAnimator="@null"
                 android:text="Cancel" />
 
             <Button
                 android:id="@+id/upnext_play"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="12dp"
+                android:layout_marginStart="16dp"
+                android:background="@drawable/tv_button_bg"
+                android:textColor="@color/tv_button_text"
+                android:paddingLeft="24dp"
+                android:paddingRight="24dp"
+                android:paddingTop="12dp"
+                android:paddingBottom="12dp"
+                android:stateListAnimator="@null"
                 android:text="Play now" />
 
         </LinearLayout>

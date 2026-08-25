@@ -7,7 +7,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -46,6 +45,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,6 +76,10 @@ fun PosterCard(
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     LaunchedEffect(focused) { onFocusChanged?.invoke(focused) }
+
+    // Tracks a fired long-press so the key-up that follows it is swallowed (otherwise
+    // the normal click would ALSO fire, opening the card right after removing it).
+    var longPressFired by remember { mutableStateOf(false) }
 
     // A modest, non-bouncy lift. dampingRatio 0.55 (underdamped) used to overshoot and
     // wobble; combined with center-origin scaling that made every card bob up AND down as
@@ -113,17 +119,36 @@ fun PosterCard(
             Modifier
                 .fillMaxWidth()
                 .height(200.dp)
+                // Long-press to remove. Compose's combinedClickable(onLongClick=…) only
+                // fires from a TOUCH long-press — on a TV remote the D-pad center is a key
+                // event, so it never triggered. We detect the hold ourselves off the key
+                // event: Android auto-repeats a held DPAD_CENTER/Enter, so once the key has
+                // been down ~450ms (or the framework flags it a long-press) we fire
+                // onLongClick and consume the release so the tap-to-open doesn't also run.
                 .then(
                     if (onLongClick != null)
-                        Modifier.combinedClickable(
-                            interactionSource = interaction,
-                            indication = null,
-                            onClick = onClick,
-                            onLongClick = onLongClick
-                        )
-                    else
-                        Modifier.clickable(interactionSource = interaction, indication = null) { onClick() }
+                        Modifier.onPreviewKeyEvent { ke ->
+                            if (ke.key != Key.DirectionCenter && ke.key != Key.Enter && ke.key != Key.NumPadEnter)
+                                return@onPreviewKeyEvent false
+                            val native = ke.nativeKeyEvent
+                            when (native.action) {
+                                android.view.KeyEvent.ACTION_DOWN -> {
+                                    val held = native.eventTime - native.downTime
+                                    if (!longPressFired && (native.isLongPress || held >= 450L)) {
+                                        longPressFired = true
+                                        onLongClick()
+                                        true
+                                    } else false
+                                }
+                                android.view.KeyEvent.ACTION_UP -> {
+                                    if (longPressFired) { longPressFired = false; true } else false
+                                }
+                                else -> false
+                            }
+                        }
+                    else Modifier
                 )
+                .clickable(interactionSource = interaction, indication = null) { onClick() }
         ) {
             Box(
                 Modifier

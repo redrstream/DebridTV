@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dark text on the green focused/pressed fill, white text on the dim resting chip. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true" android:color="#04150D" />
+    <item android:state_pressed="true" android:color="#04150D" />
+    <item android:color="#FFFFFF" />
+</selector>
