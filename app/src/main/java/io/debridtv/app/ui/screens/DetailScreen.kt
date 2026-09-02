@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -53,6 +54,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -68,6 +73,7 @@ import io.debridtv.app.ui.components.TvButton
 import io.debridtv.app.ui.components.TvOutlinedButton
 import io.debridtv.app.ui.components.tvFocusRing
 import io.debridtv.app.ui.player.PlayerActivity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -115,6 +121,13 @@ fun DetailScreen(
     val resumeFocus = remember { FocusRequester() }
     val retryFocus = remember { FocusRequester() }
     val listState = rememberLazyListState()
+
+    // While a source is resolving, BACK cancels that resolve instead of leaving the
+    // page (this handler out-ranks the plain popBackStack one above while enabled).
+    BackHandler(enabled = status != null) {
+        resolveJob?.cancel()
+        status = null
+    }
 
     val isSeries = type == "series"
 
@@ -268,6 +281,9 @@ fun DetailScreen(
             if (s != null && e != null) s to e else null
         } else null
 
+        // Cancel any resolve still in flight so an abandoned source can't later pop
+        // a failure over the stream you've since started (and so only one runs).
+        resolveJob?.cancel()
         status = "Starting…"
         resolveJob = scope.launch {
             try {
@@ -313,6 +329,8 @@ fun DetailScreen(
                     nextEpisodes = upcoming.mapNotNull { it.episodeNumber },
                     nextLabels = upcoming.map { it.displayLabel }
                 )
+            } catch (e: CancellationException) {
+                throw e // superseded or user-cancelled: don't surface as a failure
             } catch (e: Exception) {
                 status = null
                 Toast.makeText(context, e.message ?: "Failed to start stream", Toast.LENGTH_LONG).show()
@@ -815,15 +833,38 @@ private fun EpisodeDetails(video: Video) {
 
 @Composable
 private fun ResolvingOverlay(status: String, onCancel: () -> Unit) {
+    val cancelFocus = remember { FocusRequester() }
+    // Move focus onto Cancel as the overlay appears so the remote can reach it.
+    LaunchedEffect(Unit) {
+        delay(50)
+        runCatching { cancelFocus.requestFocus() }
+    }
     Box(
-        Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(0xCC000000)),
+        Modifier
+            .fillMaxSize()
+            .background(androidx.compose.ui.graphics.Color(0xCC000000))
+            // Absorb taps so a source behind the scrim can't be clicked.
+            .pointerInput(Unit) { detectTapGestures { } }
+            // Trap D-pad focus on this overlay: swallow the arrow keys so focus can't
+            // jump to the (still-composed) source list behind it. Center/Enter fall
+            // through to activate Cancel; BACK is handled by the screen's BackHandler.
+            .onPreviewKeyEvent { ke ->
+                when (ke.key) {
+                    Key.DirectionUp, Key.DirectionDown,
+                    Key.DirectionLeft, Key.DirectionRight -> true
+                    else -> false
+                }
+            },
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             Text(status, color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.padding(top = 16.dp))
-            TvButton(onClick = onCancel, modifier = Modifier.padding(top = 16.dp)) { Text("Cancel") }
+            TvButton(
+                onClick = onCancel,
+                modifier = Modifier.focusRequester(cancelFocus).padding(top = 16.dp)
+            ) { Text("Cancel") }
         }
     }
 }
