@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import io.debridtv.app.data.net.Net
@@ -19,6 +20,9 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 private val KEY_APIKEY = stringPreferencesKey("alldebrid_api_key")
 private val KEY_HISTORY = stringPreferencesKey("watch_history_json")
 private val KEY_SURROUND = booleanPreferencesKey("prefer_surround")
+private val KEY_SIMKL_TOKEN = stringPreferencesKey("simkl_access_token")
+private val KEY_SIMKL_ENABLED = booleanPreferencesKey("simkl_enabled")
+private val KEY_SIMKL_LAST_PULL = longPreferencesKey("simkl_last_pull_at")
 
 /** Stores the AllDebrid API key + playback preferences locally on the device. */
 class SettingsStore(private val context: Context) {
@@ -44,6 +48,43 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setPreferSurround(value: Boolean) {
         context.dataStore.edit { it[KEY_SURROUND] = value }
+    }
+
+    // ---- SimKL cross-device sync ------------------------------------------
+
+    /** True when SimKL sync is switched on (default on once connected). */
+    val simklEnabled: Flow<Boolean> = context.dataStore.data.map { it[KEY_SIMKL_ENABLED] ?: true }
+
+    /** Whether an account is currently linked (an access token is stored). */
+    val simklConnected: Flow<Boolean> =
+        context.dataStore.data.map { !it[KEY_SIMKL_TOKEN].isNullOrBlank() }
+
+    suspend fun simklEnabledOrDefault(): Boolean = simklEnabled.first()
+
+    suspend fun simklTokenOrNull(): String? =
+        context.dataStore.data.first()[KEY_SIMKL_TOKEN]?.takeIf { it.isNotBlank() }
+
+    suspend fun setSimklToken(token: String) {
+        context.dataStore.edit { it[KEY_SIMKL_TOKEN] = token }
+    }
+
+    suspend fun setSimklEnabled(value: Boolean) {
+        context.dataStore.edit { it[KEY_SIMKL_ENABLED] = value }
+    }
+
+    /** Epoch-ms of the last successful playback pull, used to throttle syncs
+     *  (SimKL asks apps not to poll more than every 15–30 min). 0 if never. */
+    suspend fun simklLastPullAt(): Long = context.dataStore.data.first()[KEY_SIMKL_LAST_PULL] ?: 0L
+
+    suspend fun setSimklLastPullAt(value: Long) {
+        context.dataStore.edit { it[KEY_SIMKL_LAST_PULL] = value }
+    }
+
+    suspend fun clearSimkl() {
+        context.dataStore.edit {
+            it.remove(KEY_SIMKL_TOKEN)
+            it.remove(KEY_SIMKL_LAST_PULL)
+        }
     }
 }
 

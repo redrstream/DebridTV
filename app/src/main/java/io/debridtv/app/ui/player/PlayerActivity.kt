@@ -109,6 +109,10 @@ class PlayerActivity : ComponentActivity() {
     private val upNextLeadMs = 60_000L
     private val upNextAutoAdvanceMs = 20_000L
 
+    // SimKL: scrobble "start" once per loaded episode/movie (reset when we
+    // advance to the next episode). Push is best-effort and never blocks playback.
+    private var scrobbledStart = false
+
     private val saveTick = object : Runnable {
         override fun run() {
             saveProgress()
@@ -183,6 +187,11 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onStop() {
         saveProgress()
+        // Leaving the player (e.g. walking to another room) records your spot on
+        // SimKL so another TV can pick it up. Fired before releasePlayer while the
+        // position is still readable; it runs on an app-scope coroutine so it
+        // survives this Activity being torn down.
+        scrobblePause()
         releasePlayer()
         super.onStop()
     }
@@ -258,12 +267,19 @@ class PlayerActivity : ComponentActivity() {
             override fun onPlaybackStateChanged(state: Int) {
                 // Playback actually started — reset the retry budget so a later hiccup
                 // deeper into the stream gets its own fresh set of retries.
-                if (state == Player.STATE_READY) currentRetries = 0
+                if (state == Player.STATE_READY) {
+                    currentRetries = 0
+                    // Playback is live — tell SimKL we've started watching this item.
+                    scrobbleStart()
+                }
                 if (!advancing) {
                     statusText.visibility = if (state == Player.STATE_BUFFERING) View.VISIBLE else View.GONE
                     if (state == Player.STATE_BUFFERING) statusText.text = "Buffering…"
                 }
-                if (state == Player.STATE_ENDED) offerNextEpisode()
+                if (state == Player.STATE_ENDED) {
+                    scrobbleStop()
+                    offerNextEpisode()
+                }
             }
 
             override fun onPositionDiscontinuity(
@@ -519,6 +535,8 @@ class PlayerActivity : ComponentActivity() {
                 subtitleUrls = subs.map { it.url }
                 subtitleLangs = subs.map { it.lang }
                 advancing = false
+                // New episode: let it scrobble its own "start" to SimKL.
+                scrobbledStart = false
                 statusText.visibility = View.GONE
                 p.setMediaSource(buildMediaSource())
                 p.prepare()
@@ -606,6 +624,48 @@ class PlayerActivity : ComponentActivity() {
             updatedAt = System.currentTimeMillis()
         )
         lifecycleScope.launch { ServiceLocator.history.upsert(entry) }
+    }
+
+    // ---- SimKL scrobble (cross-device sync) --------------------------------
+
+    /** A history-entry snapshot of the current playback position, or null when
+     *  there's nothing worth reporting (no player / no key). */
+    private fun currentEntry(): HistoryEntry? {
+        val p = player ?: return null
+        if (key.isBlank()) return null
+        val dur = if (p.duration > 0) p.duration else 0L
+        return HistoryEntry(
+            key = key,
+            type = type,
+            title = title,
+            poster = poster,
+            positionMs = p.currentPosition,
+            durationMs = dur,
+            updatedAt = System.currentTimeMillis()
+        )
+    }
+
+    private fun currentProgressPct(): Double {
+        val p = player ?: return 0.0
+        val dur = p.duration
+        return if (dur > 0) (p.currentPosition.toDouble() / dur * 100.0) else 0.0
+    }
+
+    private fun scrobbleStart() {
+        if (scrobbledStart) return
+        val entry = currentEntry() ?: return
+        scrobbledStart = true
+        ServiceLocator.simkl.fireStart(entry, currentProgressPct())
+    }
+
+    private fun scrobblePause() {
+        val entry = currentEntry() ?: return
+        ServiceLocator.simkl.firePause(entry, currentProgressPct())
+    }
+
+    private fun scrobbleStop() {
+        val entry = currentEntry() ?: return
+        ServiceLocator.simkl.fireStop(entry, currentProgressPct())
     }
 
     private fun releasePlayer() {

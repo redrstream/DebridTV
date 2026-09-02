@@ -12,3 +12,4 @@
 *.apk
 *.keystore
 keystore.properties
+simkl.properties

@@ -14,6 +14,17 @@ val keystoreProps = Properties().apply {
     if (keystorePropsFile.exists()) load(keystorePropsFile.inputStream())
 }
 
+// SimKL API client id for cross-device sync. This is a PUBLIC identifier (SimKL
+// sends it in plain URL query params and it's embedded in any app that uses it),
+// so it's safe to hardcode here — no secret is involved (SimKL's PIN flow uses no
+// client secret). A gitignored simkl.properties may override it for local testing.
+val simklPropsFile = rootProject.file("simkl.properties")
+val simklProps = Properties().apply {
+    if (simklPropsFile.exists()) load(simklPropsFile.inputStream())
+}
+val simklClientId = (simklProps["clientId"] as String?)?.takeIf { it.isNotBlank() }
+    ?: "506d0156c812bedd7f2b918d8c367ea19a898e7bff39c240adaddc03d8f50d05"
+
 android {
     namespace = "io.debridtv.app"
     compileSdk = 34
@@ -22,8 +33,10 @@ android {
         applicationId = "io.debridtv.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 18
-        versionName = "0.1.17"
+        versionCode = 19
+        versionName = "0.1.18"
+
+        buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
     }
 
     signingConfigs {

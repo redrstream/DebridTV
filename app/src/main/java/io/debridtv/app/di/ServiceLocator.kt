@@ -1,12 +1,15 @@
 package io.debridtv.app.di
 
 import android.content.Context
+import io.debridtv.app.BuildConfig
 import io.debridtv.app.data.alldebrid.AllDebridApi
 import io.debridtv.app.data.alldebrid.AllDebridClient
 import io.debridtv.app.data.cinemeta.CinemetaService
 import io.debridtv.app.data.net.Net
 import io.debridtv.app.data.prefs.HistoryStore
 import io.debridtv.app.data.prefs.SettingsStore
+import io.debridtv.app.data.simkl.SimklApi
+import io.debridtv.app.data.simkl.SimklClient
 import io.debridtv.app.data.scraper.ApibayApi
 import io.debridtv.app.data.scraper.ApibayProvider
 import io.debridtv.app.data.scraper.EztvApi
@@ -65,4 +68,22 @@ object ServiceLocator {
     }
 
     val resolver: StreamResolver by lazy { StreamResolver(allDebrid) }
+
+    private val simklApi: SimklApi by lazy {
+        Net.retrofitSimkl(
+            baseUrl = "https://api.simkl.com/",
+            clientId = BuildConfig.SIMKL_CLIENT_ID,
+            appName = "debridtv",
+            appVersion = BuildConfig.VERSION_NAME,
+            userAgent = "DebridTV/${BuildConfig.VERSION_NAME}"
+        ).create(SimklApi::class.java)
+    }
+
+    /** Cross-device watch sync (SimKL). Inert unless a client id was baked into
+     *  this build and an account is linked in Settings. */
+    val simkl: SimklClient by lazy {
+        SimklClient(simklApi, settings, history) { type, imdb ->
+            mediaRepo.meta(type, imdb)?.poster
+        }
+    }
 }

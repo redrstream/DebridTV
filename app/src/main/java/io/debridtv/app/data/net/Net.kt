@@ -112,6 +112,49 @@ object Net {
             .addConverterFactory(json.asConverterFactory(contentType))
             .build()
 
+    // ---- SimKL client ------------------------------------------------------
+
+    /**
+     * Retrofit for the SimKL API. Injects the constants SimKL wants on every
+     * call — the `simkl-api-key` header + `client_id` query param (both the
+     * public client id) and a `User-Agent` — while the per-user Bearer token is
+     * passed per-call. Never cached: watch state must stay live. The client id
+     * isn't a secret (SimKL's PIN flow has no secret); bodies log only in debug.
+     */
+    fun retrofitSimkl(
+        baseUrl: String,
+        clientId: String,
+        appName: String,
+        appVersion: String,
+        userAgent: String
+    ): Retrofit {
+        val client = baseClient()
+            .addInterceptor { chain ->
+                val original = chain.request()
+                // SimKL requires client_id + app-name + app-version on EVERY request
+                // (missing them can get the client_id suspended), plus a User-Agent.
+                val url = original.url.newBuilder()
+                    .setQueryParameter("client_id", clientId)
+                    .setQueryParameter("app-name", appName)
+                    .setQueryParameter("app-version", appVersion)
+                    .build()
+                val request = original.newBuilder()
+                    .url(url)
+                    .header("Content-Type", "application/json")
+                    .header("simkl-api-key", clientId)
+                    .header("User-Agent", userAgent)
+                    .build()
+                chain.proceed(request)
+            }
+            .addInterceptor(debugLogger(HttpLoggingInterceptor.Level.BASIC))
+            .build()
+        return Retrofit.Builder()
+            .baseUrl(baseUrl)
+            .client(client)
+            .addConverterFactory(json.asConverterFactory(contentType))
+            .build()
+    }
+
     // ---- Cached client (Cinemeta only) -------------------------------------
 
     private val cache: Cache by lazy {

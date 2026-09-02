@@ -73,6 +73,12 @@ fun HomeScreen(nav: NavHostController) {
     var rowsState by remember { mutableStateOf(HomeLoad.LOADING) }
     val retryFocus = remember { FocusRequester() }
 
+    // Pull cross-device resume points from SimKL (if connected + enabled) so
+    // Continue Watching reflects what you were watching on another TV. Best-effort
+    // and off the UI thread; the history Flow above updates reactively as entries
+    // are merged in.
+    LaunchedEffect(Unit) { ServiceLocator.simkl.firePull() }
+
     // When the error appears, put focus on Retry so it's actionable with one press
     // (the nav bar above doesn't hand focus down to it otherwise).
     LaunchedEffect(rowsState) {
