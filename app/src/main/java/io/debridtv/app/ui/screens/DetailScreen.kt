@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -113,6 +114,7 @@ fun DetailScreen(
     val backFocus = remember { FocusRequester() }
     val resumeFocus = remember { FocusRequester() }
     val retryFocus = remember { FocusRequester() }
+    val listState = rememberLazyListState()
 
     val isSeries = type == "series"
 
@@ -195,6 +197,12 @@ fun DetailScreen(
         canResumeMovie -> "Resume"
         else -> null
     }
+
+    // Index of the "Season N · X episodes" header among the LazyColumn items below,
+    // so tapping an episode can scroll its details + sources into view (the episode
+    // row is horizontal, so this brings the picked episode's links up near the top).
+    // Item order: Back, [Resume], Header, Seasons, EpisodesHeader, EpisodesRow, …
+    val epHeaderIndex = 3 + (if (resumeLabel != null) 1 else 0)
 
     // Pre-select the resume episode so its sources start loading immediately.
     LaunchedEffect(meta, resume) {
@@ -378,7 +386,7 @@ fun DetailScreen(
                 }
             }
         } else {
-        LazyColumn(Modifier.fillMaxSize().padding(24.dp)) {
+        LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(24.dp)) {
             item {
                 TvButton(
                     onClick = { nav.popBackStack() },
@@ -440,20 +448,36 @@ fun DetailScreen(
                             color = MaterialTheme.colorScheme.onBackground,
                             modifier = Modifier.padding(top = 16.dp, bottom = 6.dp))
                     }
-                    items(episodes, key = { it.id }) { ep ->
-                        val watched = episodeWatched(ep)
-                        val epKey = ep.season?.let { s -> ep.episodeNumber?.let { e -> EpKey(s, e) } }
-                        val entry = epKey?.let { entriesByKey[it] }
-                        // Show a resume bar only for a partially-watched, not-yet-done episode.
-                        val prog = if (!watched && entry != null && entry.progress > 0.02f) entry.progress else 0f
-                        EpisodeItem(
-                            label = ep.displayLabel,
-                            selected = currentVideo?.id == ep.id,
-                            watched = watched,
-                            progress = prog,
-                            onClick = { currentVideo = ep },
-                            onLongClick = { markTarget = ep }
-                        )
+                    // Episodes as a horizontal row (like the season selector) so picking
+                    // one doesn't push the sources far down past every other episode.
+                    // Tapping an episode scrolls its details + sources up into view.
+                    item {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(episodes, key = { it.id }) { ep ->
+                                val watched = episodeWatched(ep)
+                                val epKey = ep.season?.let { s -> ep.episodeNumber?.let { e -> EpKey(s, e) } }
+                                val entry = epKey?.let { entriesByKey[it] }
+                                val prog = if (!watched && entry != null && entry.progress > 0.02f) entry.progress else 0f
+                                EpisodeCard(
+                                    number = ep.episodeNumber,
+                                    selected = currentVideo?.id == ep.id,
+                                    watched = watched,
+                                    progress = prog,
+                                    onClick = {
+                                        currentVideo = ep
+                                        scope.launch {
+                                            runCatching { listState.animateScrollToItem(epHeaderIndex) }
+                                        }
+                                    },
+                                    onLongClick = { markTarget = ep }
+                                )
+                            }
+                        }
+                    }
+                    // Details for the selected episode (thumbnail + title + synopsis),
+                    // shown between the episode row and its sources.
+                    currentVideo?.let { cv ->
+                        item { EpisodeDetails(cv) }
                     }
                 }
             }
@@ -656,10 +680,16 @@ private fun ResumeButton(
     }
 }
 
+/**
+ * A compact episode "chip" for the horizontal episode row: the episode number,
+ * a watched ✓ or a resume progress bar, with focus/selection shown by border +
+ * background (never a scale — a scale on a focusable node distorts the D-pad
+ * focus rect and traps navigation, a lesson learned the hard way in this app).
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun EpisodeItem(
-    label: String,
+private fun EpisodeCard(
+    number: Int?,
     selected: Boolean,
     watched: Boolean,
     progress: Float,
@@ -670,14 +700,8 @@ private fun EpisodeItem(
     val focused by interaction.collectIsFocusedAsState()
     Box(
         Modifier
-            .fillMaxWidth()
-            // Watched episodes read as "done" by dimming; the focused one is always
-            // full-brightness so you can still see where you are. Alpha only (no scale):
-            // a scale on this focusable Box would distort the focus rect and trap D-pad
-            // navigation between episodes. The border + background signal focus instead.
-            .graphicsLayer {
-                alpha = if (watched && !focused) 0.5f else 1f
-            }
+            .width(76.dp)
+            .graphicsLayer { alpha = if (watched && !focused) 0.5f else 1f }
             .clip(RoundedCornerShape(8.dp))
             .background(
                 when {
@@ -687,8 +711,12 @@ private fun EpisodeItem(
                 }
             )
             .border(
-                width = if (focused) 2.dp else 0.dp,
-                color = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.background,
+                width = if (focused) 2.dp else 1.dp,
+                color = when {
+                    focused -> MaterialTheme.colorScheme.primary
+                    selected -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.surfaceVariant
+                },
                 shape = RoundedCornerShape(8.dp)
             )
             .combinedClickable(
@@ -697,26 +725,25 @@ private fun EpisodeItem(
                 onClick = onClick,
                 onLongClick = onLongClick
             )
-            .padding(12.dp)
+            .padding(vertical = 14.dp, horizontal = 8.dp)
     ) {
-        Column {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    label,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                number?.let { "E$it" } ?: "?",
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.Bold
+            )
+            if (watched) {
+                Icon(
+                    Icons.Filled.Check,
+                    contentDescription = "Watched",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 4.dp).size(16.dp)
                 )
-                if (watched) {
-                    Icon(
-                        Icons.Filled.Check,
-                        contentDescription = "Watched",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-            }
-            // Resume bar for a partially-watched episode.
-            if (progress > 0f) {
+            } else if (progress > 0f) {
                 Box(
                     Modifier
                         .padding(top = 8.dp)
@@ -732,6 +759,55 @@ private fun EpisodeItem(
                             .background(MaterialTheme.colorScheme.primary)
                     )
                 }
+            }
+        }
+    }
+}
+
+/** Thumbnail + title + synopsis for the selected episode, shown above its sources. */
+@Composable
+private fun EpisodeDetails(video: Video) {
+    Row(Modifier.fillMaxWidth().padding(top = 16.dp)) {
+        val thumb = video.thumbnail
+        if (!thumb.isNullOrBlank()) {
+            Box(
+                Modifier
+                    .width(160.dp)
+                    .height(90.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                AsyncImage(
+                    model = thumb,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            Spacer(Modifier.width(16.dp))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                video.displayLabel,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            video.released?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    it.take(10),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+            video.overview?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 4,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
             }
         }
     }
