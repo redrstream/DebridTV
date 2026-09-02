@@ -113,8 +113,11 @@ class StreamResolver(private val ad: AllDebridClient) {
         val VIDEO_EXT = listOf(".mkv", ".mp4", ".avi", ".m4v", ".mov", ".ts", ".webm", ".wmv", ".flv")
 
         // How long to wait for a just-cached link to become streamable, and how often to
-        // re-probe. Returns as soon as it's servable, so these are only an upper bound.
-        const val PROBE_MAX_WAIT_MS = 20_000L
+        // re-probe. Returns as soon as it's servable, so these are only an upper bound —
+        // a warm/cached link clears the first probe instantly. On timeout resolve hands
+        // the link to the player anyway (which keeps buffering + retrying), so a shorter
+        // cap just means dropping into the player sooner rather than waiting on the spinner.
+        const val PROBE_MAX_WAIT_MS = 10_000L
         const val PROBE_INTERVAL_MS = 2_000L
     }
 }
