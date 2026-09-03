@@ -130,6 +130,6 @@ class StreamResolver(private val ad: AllDebridClient) {
         // Upper bound on the "waiting for AllDebrid to cache this source" step for the
         // interactive Play path. Cached sources return well inside this; an uncached/dead
         // magnet gives up here instead of polling for the full ensureReady() default.
-        const val READY_TIMEOUT_MS = 25_000L
+        const val READY_TIMEOUT_MS = 15_000L
     }
 }

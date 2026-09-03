@@ -61,11 +61,13 @@ import io.debridtv.app.ui.components.TvOutlinedButton
 import io.debridtv.app.ui.components.toCard
 import io.debridtv.app.ui.player.PlayerActivity
 
-// How often Home re-pulls SimKL resume points while it's on screen, and the minimum
-// gap SimklClient will honour between pulls (stops rapid nav bounce from spamming the
-// API). With a few TVs this stays far under SimKL's ~1000 req/day client cap. Lower
-// POLL_MS for a snappier room-to-room handoff at the cost of more requests.
-private const val FOREGROUND_PULL_POLL_MS = 90_000L
+// SimKL pull cadence. The PRIMARY, cheap trigger is app-resume (walking up to / waking
+// the TV) — that's one call per arrival. BACKSTOP_MS is only a slow safety net for a TV
+// left awake and parked on Home the whole time; at 5 min, 15 min of idle browsing is
+// just ~3 calls. MIN_INTERVAL_MS is the wall-clock floor SimklClient honours so rapid
+// nav in/out of Home can't spam. This keeps a few-TV household far under SimKL's
+// ~1000 req/day client cap. Lower BACKSTOP_MS for snappier parked-TV refresh at more cost.
+private const val FOREGROUND_PULL_BACKSTOP_MS = 5 * 60 * 1000L
 private const val FOREGROUND_PULL_MIN_INTERVAL_MS = 20_000L
 
 @Composable
@@ -90,10 +92,11 @@ fun HomeScreen(nav: NavHostController) {
     // are merged in.
     //
     // A TV is often left sitting on this screen while you watch in another room, so a
-    // one-shot pull on first composition goes stale. Instead: pull whenever the app
-    // is resumed (walking up / waking the TV), and keep pulling on a slow timer while
-    // Home is on screen so a parked TV still catches your latest position. A short
-    // wall-clock floor in SimklClient stops rapid re-entry from spamming the API.
+    // one-shot pull on first composition goes stale. Primary trigger: pull on every
+    // app-resume (walking up / waking the TV from screensaver) — one cheap call per
+    // arrival, which covers the normal room-to-room case. A slow backstop timer also
+    // pulls while Home stays foregrounded so a TV parked awake still catches up. A
+    // wall-clock floor in SimklClient dedupes the two and stops rapid re-entry spam.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -106,8 +109,8 @@ fun HomeScreen(nav: NavHostController) {
     }
     LaunchedEffect(Unit) {
         while (true) {
+            delay(FOREGROUND_PULL_BACKSTOP_MS)
             ServiceLocator.simkl.firePull(FOREGROUND_PULL_MIN_INTERVAL_MS)
-            delay(FOREGROUND_PULL_POLL_MS)
         }
     }
 

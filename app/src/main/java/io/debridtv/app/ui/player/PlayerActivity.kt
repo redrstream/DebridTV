@@ -113,6 +113,13 @@ class PlayerActivity : ComponentActivity() {
     // advance to the next episode). Push is best-effort and never blocks playback.
     private var scrobbledStart = false
 
+    // Sticky "this title is finished" flag for the currently-loaded item. Set the
+    // moment we reach the end / offer the next episode, so completion is recorded
+    // deterministically instead of being inferred from position-vs-duration (which
+    // misses when credits run long). Kept on every subsequent saveProgress so a
+    // later 10s tick can't downgrade it; reset when a new episode loads.
+    private var currentWatched = false
+
     private val saveTick = object : Runnable {
         override fun run() {
             saveProgress()
@@ -277,6 +284,7 @@ class PlayerActivity : ComponentActivity() {
                     if (state == Player.STATE_BUFFERING) statusText.text = "Buffering…"
                 }
                 if (state == Player.STATE_ENDED) {
+                    markCurrentWatched()
                     scrobbleStop()
                     offerNextEpisode()
                 }
@@ -474,7 +482,9 @@ class PlayerActivity : ComponentActivity() {
     private fun offerNextEpisode() {
         if (upNextShown || nextSeasons.isEmpty() || nextLabels.isEmpty()) return
         upNextShown = true
-        saveProgress()
+        // We're in the last minute — the episode is effectively done. Record it as
+        // watched now so it registers even if the user leaves before the true end.
+        markCurrentWatched()
         upNextText.text = "Up next: ${nextLabels.first()}"
         upNextPanel.visibility = View.VISIBLE
         upNextPlay.requestFocus()
@@ -535,8 +545,10 @@ class PlayerActivity : ComponentActivity() {
                 subtitleUrls = subs.map { it.url }
                 subtitleLangs = subs.map { it.lang }
                 advancing = false
-                // New episode: let it scrobble its own "start" to SimKL.
+                // New episode: let it scrobble its own "start" to SimKL, and start
+                // fresh on the finished flag (this one hasn't been watched yet).
                 scrobbledStart = false
+                currentWatched = false
                 statusText.visibility = View.GONE
                 p.setMediaSource(buildMediaSource())
                 p.prepare()
@@ -621,9 +633,16 @@ class PlayerActivity : ComponentActivity() {
             poster = poster,
             positionMs = pos,
             durationMs = dur,
-            updatedAt = System.currentTimeMillis()
+            updatedAt = System.currentTimeMillis(),
+            watched = currentWatched
         )
         lifecycleScope.launch { ServiceLocator.history.upsert(entry) }
+    }
+
+    /** Mark the currently-loaded item finished and persist it right away. Idempotent. */
+    private fun markCurrentWatched() {
+        currentWatched = true
+        saveProgress()
     }
 
     // ---- SimKL scrobble (cross-device sync) --------------------------------
