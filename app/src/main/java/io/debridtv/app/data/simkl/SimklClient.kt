@@ -42,12 +42,6 @@ class SimklClient(
     // player survives the Activity being torn down (lifecycleScope would cancel).
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    // The first pull of each app launch always runs (a fresh "walk into the other
-    // room and open the app" sync); after that, pulls are throttled — SimKL asks
-    // apps not to poll more than every 15–30 min ("rapid-switch spam" / no
-    // unconditional background polling), or the client_id can be suspended.
-    @Volatile private var pulledThisLaunch = false
-
     fun isConfigured(): Boolean = clientId.isNotBlank()
 
     // ---- PIN device-flow login --------------------------------------------
@@ -134,21 +128,28 @@ class SimklClient(
 
     // ---- Sync playback (pull) ----------------------------------------------
 
-    fun firePull() {
-        scope.launch { pullPlayback() }
+    /**
+     * Fetch SimKL resume points, skipping if the last pull was under [minIntervalMs]
+     * ago. The caller sets the cadence: Home passes a short interval so walking up to
+     * a TV that's been sitting on the screen refreshes your position quickly; a long
+     * default guards any accidental background caller. SimKL only objects to
+     * *unconditional background* polling — a foreground screen the user is looking at
+     * refreshing every minute or two is fine and nowhere near the daily request cap.
+     */
+    fun firePull(minIntervalMs: Long = DEFAULT_THROTTLE_MS) {
+        scope.launch { pullPlayback(minIntervalMs) }
     }
 
     /** Merge SimKL's resume points into local history — but only entries newer
      *  than what this device already has, so a spot you just set locally isn't
      *  clobbered by a stale remote one. */
-    suspend fun pullPlayback() {
+    suspend fun pullPlayback(minIntervalMs: Long = DEFAULT_THROTTLE_MS) {
         if (!isConfigured() || !settings.simklEnabledOrDefault()) return
         val token = validToken() ?: return
-        // Throttle: after the first pull of this app launch, don't pull again for
-        // PULL_THROTTLE_MS. Keeps returning to Home from re-hitting the API.
+        // Throttle purely on wall-clock so rapid re-triggers (bouncing in/out of Home)
+        // don't spam the API, while a genuine periodic/foreground refresh gets through.
         val now = System.currentTimeMillis()
-        if (pulledThisLaunch && now - settings.simklLastPullAt() < PULL_THROTTLE_MS) return
-        pulledThisLaunch = true
+        if (now - settings.simklLastPullAt() < minIntervalMs) return
         settings.setSimklLastPullAt(now)
         val items = try {
             withContext(Dispatchers.IO) { api.playback(bearer(token)) }
@@ -161,7 +162,12 @@ class SimklClient(
             val mapped = mapItem(item) ?: continue
             val existing = history.get(mapped.key)
             if (existing != null && existing.updatedAt >= pausedAt) continue
-            val durationMs = (mapped.runtimeMin ?: 0) * 60_000L
+            // Turn SimKL's percent into an absolute resume position. Prefer the runtime
+            // SimKL reports; if it's missing, reuse a duration this device already knows
+            // for the title (e.g. an earlier local watch) so the spot still carries,
+            // rather than collapsing progress to 0.
+            val durationMs = ((mapped.runtimeMin ?: 0) * 60_000L)
+                .takeIf { it > 0 } ?: (existing?.durationMs ?: 0L)
             val positionMs = if (durationMs > 0) (item.progress / 100.0 * durationMs).toLong() else 0L
             val poster = existing?.poster
                 ?: runCatching { posterFor(mapped.type, mapped.showImdb) }.getOrNull()
@@ -233,7 +239,9 @@ class SimklClient(
     }
 
     private companion object {
-        const val PULL_THROTTLE_MS = 15 * 60 * 1000L // 15 min
+        // Fallback throttle for any caller that doesn't specify one. Home overrides
+        // this with a short interval (see FOREGROUND_PULL_MIN_INTERVAL_MS there).
+        const val DEFAULT_THROTTLE_MS = 15 * 60 * 1000L // 15 min
 
         val ISO_PATTERNS = listOf(
             "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",

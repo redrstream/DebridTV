@@ -19,7 +19,14 @@ class StreamResolver(private val ad: AllDebridClient) {
         onProgress: (String) -> Unit = {}
     ): ResolvedStream {
         onProgress("Adding to AllDebrid…")
-        val info = ad.ensureReady(source.magnet()) { onProgress(progressText(it)) }
+        // Bound the pre-player wait. A source already cached on AllDebrid reports Ready
+        // in ~1 poll, so this cap never bites for the common case; it only stops a
+        // NOT-cached or dead magnet (no seeders) from holding the resolve spinner for the
+        // full 180s download window. On timeout the caller surfaces a message and the user
+        // can pick another source (or Queue this one to cache in the background).
+        val info = ad.ensureReady(source.magnet(), timeoutMs = READY_TIMEOUT_MS) {
+            onProgress(progressText(it))
+        }
         val id = info.id ?: throw AllDebridException("AllDebrid returned no magnet id")
 
         val files = ad.files(id)
@@ -119,5 +126,10 @@ class StreamResolver(private val ad: AllDebridClient) {
         // cap just means dropping into the player sooner rather than waiting on the spinner.
         const val PROBE_MAX_WAIT_MS = 10_000L
         const val PROBE_INTERVAL_MS = 2_000L
+
+        // Upper bound on the "waiting for AllDebrid to cache this source" step for the
+        // interactive Play path. Cached sources return well inside this; an uncached/dead
+        // magnet gives up here instead of polling for the full ensureReady() default.
+        const val READY_TIMEOUT_MS = 25_000L
     }
 }

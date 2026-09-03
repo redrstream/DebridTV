@@ -96,7 +96,7 @@ class AllDebridClient(
             info = status(id)
             onProgress(info)
         }
-        if (!info.isReady) throw AllDebridException("Timed out waiting for AllDebrid to cache this source")
+        if (!info.isReady) throw AllDebridException("Source isn't cached yet — try another, or Queue it to cache in the background")
         return info
     }
 

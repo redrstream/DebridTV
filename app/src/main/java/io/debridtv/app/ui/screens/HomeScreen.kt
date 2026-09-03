@@ -28,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -46,6 +47,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavHostController
 import io.debridtv.app.data.alldebrid.MagnetInfo
 import io.debridtv.app.di.ServiceLocator
@@ -56,6 +60,13 @@ import io.debridtv.app.ui.components.TvButton
 import io.debridtv.app.ui.components.TvOutlinedButton
 import io.debridtv.app.ui.components.toCard
 import io.debridtv.app.ui.player.PlayerActivity
+
+// How often Home re-pulls SimKL resume points while it's on screen, and the minimum
+// gap SimklClient will honour between pulls (stops rapid nav bounce from spamming the
+// API). With a few TVs this stays far under SimKL's ~1000 req/day client cap. Lower
+// POLL_MS for a snappier room-to-room handoff at the cost of more requests.
+private const val FOREGROUND_PULL_POLL_MS = 90_000L
+private const val FOREGROUND_PULL_MIN_INTERVAL_MS = 20_000L
 
 @Composable
 fun HomeScreen(nav: NavHostController) {
@@ -77,7 +88,28 @@ fun HomeScreen(nav: NavHostController) {
     // Continue Watching reflects what you were watching on another TV. Best-effort
     // and off the UI thread; the history Flow above updates reactively as entries
     // are merged in.
-    LaunchedEffect(Unit) { ServiceLocator.simkl.firePull() }
+    //
+    // A TV is often left sitting on this screen while you watch in another room, so a
+    // one-shot pull on first composition goes stale. Instead: pull whenever the app
+    // is resumed (walking up / waking the TV), and keep pulling on a slow timer while
+    // Home is on screen so a parked TV still catches your latest position. A short
+    // wall-clock floor in SimklClient stops rapid re-entry from spamming the API.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                ServiceLocator.simkl.firePull(FOREGROUND_PULL_MIN_INTERVAL_MS)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            ServiceLocator.simkl.firePull(FOREGROUND_PULL_MIN_INTERVAL_MS)
+            delay(FOREGROUND_PULL_POLL_MS)
+        }
+    }
 
     // When the error appears, put focus on Retry so it's actionable with one press
     // (the nav bar above doesn't hand focus down to it otherwise).
