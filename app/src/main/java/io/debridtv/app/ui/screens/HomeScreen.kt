@@ -97,12 +97,16 @@ fun HomeScreen(nav: NavHostController) {
     // arrival, which covers the normal room-to-room case. A slow backstop timer also
     // pulls while Home stays foregrounded so a TV parked awake still catches up. A
     // wall-clock floor in SimklClient dedupes the two and stops rapid re-entry spam.
+    fun syncSimkl() {
+        // Resume points (in-progress) + watched/finished state, so all three look the
+        // same on every TV. Both are throttled and best-effort inside SimklClient.
+        ServiceLocator.simkl.firePull(FOREGROUND_PULL_MIN_INTERVAL_MS)
+        ServiceLocator.simkl.firePullWatched(FOREGROUND_PULL_MIN_INTERVAL_MS)
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                ServiceLocator.simkl.firePull(FOREGROUND_PULL_MIN_INTERVAL_MS)
-            }
+            if (event == Lifecycle.Event.ON_RESUME) syncSimkl()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -110,7 +114,7 @@ fun HomeScreen(nav: NavHostController) {
     LaunchedEffect(Unit) {
         while (true) {
             delay(FOREGROUND_PULL_BACKSTOP_MS)
-            ServiceLocator.simkl.firePull(FOREGROUND_PULL_MIN_INTERVAL_MS)
+            syncSimkl()
         }
     }
 

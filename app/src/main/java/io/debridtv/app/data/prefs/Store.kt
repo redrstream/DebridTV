@@ -23,6 +23,7 @@ private val KEY_SURROUND = booleanPreferencesKey("prefer_surround")
 private val KEY_SIMKL_TOKEN = stringPreferencesKey("simkl_access_token")
 private val KEY_SIMKL_ENABLED = booleanPreferencesKey("simkl_enabled")
 private val KEY_SIMKL_LAST_PULL = longPreferencesKey("simkl_last_pull_at")
+private val KEY_SIMKL_LAST_WATCHED = longPreferencesKey("simkl_last_watched_sync_at")
 
 /** Stores the AllDebrid API key + playback preferences locally on the device. */
 class SettingsStore(private val context: Context) {
@@ -80,10 +81,19 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit { it[KEY_SIMKL_LAST_PULL] = value }
     }
 
+    /** Epoch-ms of the last watched-history sync (a separate, less frequent pull that
+     *  brings finished/watched state across from other devices). 0 if never. */
+    suspend fun simklLastWatchedSyncAt(): Long = context.dataStore.data.first()[KEY_SIMKL_LAST_WATCHED] ?: 0L
+
+    suspend fun setSimklLastWatchedSyncAt(value: Long) {
+        context.dataStore.edit { it[KEY_SIMKL_LAST_WATCHED] = value }
+    }
+
     suspend fun clearSimkl() {
         context.dataStore.edit {
             it.remove(KEY_SIMKL_TOKEN)
             it.remove(KEY_SIMKL_LAST_PULL)
+            it.remove(KEY_SIMKL_LAST_WATCHED)
         }
     }
 }

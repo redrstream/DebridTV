@@ -185,6 +185,97 @@ class SimklClient(
         }
     }
 
+    // ---- Sync watched state (pull) -----------------------------------------
+
+    fun firePullWatched(minIntervalMs: Long = DEFAULT_THROTTLE_MS) {
+        scope.launch { pullWatched(minIntervalMs) }
+    }
+
+    /**
+     * Bring finished/watched state across from other devices. The resume list
+     * ([pullPlayback]) drops an item once it passes ~80%, so a title finished on another
+     * TV would otherwise never show its ✓ here. This pulls the library's watched
+     * episodes/movies and marks local history to match, so watched / in-progress /
+     * unwatched all look the same whichever TV you're on.
+     *
+     * For a show only the FURTHEST watched episode is stored — DetailScreen infers every
+     * earlier one (impliedWatchedUpTo) and Continue Watching rolls to the next. To avoid
+     * dragging your whole back-catalogue into Continue Watching on the first sync, the
+     * first pull only looks back [FIRST_SYNC_WINDOW_MS]; after that it's incremental.
+     */
+    suspend fun pullWatched(minIntervalMs: Long = DEFAULT_THROTTLE_MS) {
+        if (!isConfigured() || !settings.simklEnabledOrDefault()) return
+        val token = validToken() ?: return
+        val now = System.currentTimeMillis()
+        val last = settings.simklLastWatchedSyncAt()
+        if (last != 0L && now - last < minIntervalMs) return
+        // First run: a short recent window (keeps Continue Watching from filling with old
+        // finished shows). After that: incremental from the last sync, with a day of
+        // overlap so a boundary/clock-skew item is re-fetched (marking is idempotent).
+        val since = if (last == 0L) now - FIRST_SYNC_WINDOW_MS else last - OVERLAP_MS
+        val resp = try {
+            withContext(Dispatchers.IO) { api.allItems(bearer(token), dateFrom = formatIso(since)) }
+        } catch (_: Exception) {
+            return
+        }
+        settings.setSimklLastWatchedSyncAt(now)
+
+        for (mi in resp.movies) {
+            // Only a completed movie is "watched"; an in-progress one arrives via the resume pull.
+            if (mi.status != null && mi.status != "completed") continue
+            val imdb = mi.movie?.ids?.imdb ?: continue
+            markWatchedLocal(
+                key = imdb, type = "movie",
+                title = mi.movie.title ?: imdb, showImdb = imdb,
+                watchedAt = parseIso(mi.last_watched_at)
+            )
+        }
+        for (si in resp.shows + resp.anime) {
+            val imdb = si.show?.ids?.imdb ?: continue
+            val furthest = si.seasons
+                .flatMap { s ->
+                    s.episodes.mapNotNull { ep ->
+                        val sn = s.number ?: return@mapNotNull null
+                        val en = ep.number ?: return@mapNotNull null
+                        Triple(sn, en, ep.watched_at)
+                    }
+                }
+                .filter { it.first > 0 && it.second > 0 }
+                .maxWithOrNull(compareBy({ it.first }, { it.second })) ?: continue
+            markWatchedLocal(
+                key = "$imdb:${furthest.first}:${furthest.second}", type = "series",
+                title = si.show.title ?: imdb, showImdb = imdb,
+                watchedAt = parseIso(furthest.third) ?: parseIso(si.last_watched_at)
+            )
+        }
+    }
+
+    /** Mark a local history entry watched from a remote sync, without clobbering a fresher
+     *  local state (e.g. a rewatch you've since started on this TV). */
+    private suspend fun markWatchedLocal(
+        key: String, type: String, title: String, showImdb: String, watchedAt: Long?
+    ) {
+        val existing = history.get(key)
+        val stamp = watchedAt ?: System.currentTimeMillis()
+        // Skip if what we have locally is already at least as fresh — whether it's an
+        // existing watched mark or a rewatch in progress here that's newer than this
+        // remote watch. Only a strictly-newer remote watched state is applied.
+        if (existing != null && existing.updatedAt >= stamp) return
+        val poster = existing?.poster ?: runCatching { posterFor(type, showImdb) }.getOrNull()
+        history.upsert(
+            HistoryEntry(
+                key = key,
+                type = type,
+                title = title,
+                poster = poster,
+                positionMs = existing?.positionMs ?: 0L,
+                durationMs = existing?.durationMs ?: 0L,
+                updatedAt = maxOf(existing?.updatedAt ?: 0L, stamp),
+                watched = true
+            )
+        )
+    }
+
     private data class Mapped(
         val key: String,
         val type: String,
@@ -238,10 +329,24 @@ class SimklClient(
         return null
     }
 
+    /** Format epoch-ms as a SimKL ISO-8601 UTC timestamp for the date_from query. */
+    private fun formatIso(epochMs: Long): String {
+        val fmt = SimpleDateFormat(ISO_PATTERNS[1], Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }
+        return fmt.format(java.util.Date(epochMs))
+    }
+
     private companion object {
         // Fallback throttle for any caller that doesn't specify one. Home overrides
         // this with a short interval (see FOREGROUND_PULL_MIN_INTERVAL_MS there).
         const val DEFAULT_THROTTLE_MS = 15 * 60 * 1000L // 15 min
+
+        // First watched-sync only looks back this far, so Continue Watching isn't flooded
+        // with the whole back-catalogue; subsequent syncs are incremental.
+        const val FIRST_SYNC_WINDOW_MS = 3L * 24 * 60 * 60 * 1000L // 3 days
+        // Re-fetch overlap on incremental syncs to catch boundary/clock-skew items.
+        const val OVERLAP_MS = 24 * 60 * 60 * 1000L // 1 day
 
         val ISO_PATTERNS = listOf(
             "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",

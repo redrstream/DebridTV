@@ -7,6 +7,7 @@ import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
 import retrofit2.http.Path
+import retrofit2.http.Query
 
 /**
  * SimKL API (https://api.simkl.com). Only the slice DebridTV needs for
@@ -48,6 +49,22 @@ interface SimklApi {
 
     @GET("sync/playback")
     suspend fun playback(@Header("Authorization") auth: String): List<SimklPlaybackItem>
+
+    // ---- Sync all-items (watched / finished state) -------------------------
+
+    /**
+     * The user's whole library grouped by media type, with per-episode watched
+     * timestamps (episode_watched_at=yes). Used to bring finished/watched state across
+     * from other devices — the resume list ([playback]) drops items once they pass
+     * ~80%, so this is how a "finished elsewhere" title becomes watched here too.
+     * `date_from` (ISO-8601) makes it incremental after the first full sync.
+     */
+    @GET("sync/all-items")
+    suspend fun allItems(
+        @Header("Authorization") auth: String,
+        @Query("episode_watched_at") episodeWatchedAt: String = "yes",
+        @Query("date_from") dateFrom: String? = null
+    ): SimklAllItems
 }
 
 // ---- Shared media DTOs -----------------------------------------------------
@@ -128,4 +145,42 @@ data class SimklPlaybackItem(
     val movie: SimklMovie? = null,
     val show: SimklShow? = null,
     val episode: SimklEpisode? = null
+)
+
+// ---- All-items (watched state) DTOs ----------------------------------------
+
+/** sync/all-items groups the library by type. anime is separate from shows on SimKL
+ *  but carries the same shape, so we treat the two the same. */
+@Serializable
+data class SimklAllItems(
+    val movies: List<SimklMovieItem> = emptyList(),
+    val shows: List<SimklShowItem> = emptyList(),
+    val anime: List<SimklShowItem> = emptyList()
+)
+
+@Serializable
+data class SimklMovieItem(
+    val last_watched_at: String? = null,
+    val status: String? = null,
+    val movie: SimklMovie? = null
+)
+
+@Serializable
+data class SimklShowItem(
+    val last_watched_at: String? = null,
+    val status: String? = null,
+    val show: SimklShow? = null,
+    val seasons: List<SimklSeasonWatched> = emptyList()
+)
+
+@Serializable
+data class SimklSeasonWatched(
+    val number: Int? = null,
+    val episodes: List<SimklEpisodeWatched> = emptyList()
+)
+
+@Serializable
+data class SimklEpisodeWatched(
+    val number: Int? = null,
+    val watched_at: String? = null
 )
