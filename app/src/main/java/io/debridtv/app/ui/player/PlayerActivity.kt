@@ -122,6 +122,7 @@ class PlayerActivity : ComponentActivity() {
 
     private val saveTick = object : Runnable {
         override fun run() {
+            maybeMarkWatched()
             saveProgress()
             maybeOfferUpNext()
             handler.postDelayed(this, 10_000)
@@ -193,12 +194,15 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        // Catch the "watched most of it then left" case before we save/scrobble.
+        maybeMarkWatched()
         saveProgress()
-        // Leaving the player (e.g. walking to another room) records your spot on
-        // SimKL so another TV can pick it up. Fired before releasePlayer while the
-        // position is still readable; it runs on an app-scope coroutine so it
-        // survives this Activity being torn down.
-        scrobblePause()
+        // Leaving the player (e.g. walking to another room) records where we are on
+        // SimKL so another TV can pick it up. Past the watched threshold we send STOP
+        // (which SimKL records as watched); otherwise PAUSE, which keeps the resume
+        // spot. Fired before releasePlayer while the position is still readable; it
+        // runs on an app-scope coroutine so it survives this Activity being torn down.
+        scrobbleExit()
         releasePlayer()
         super.onStop()
     }
@@ -645,6 +649,16 @@ class PlayerActivity : ComponentActivity() {
         saveProgress()
     }
 
+    /**
+     * Count the item as watched once you're most of the way through (WATCHED_THRESHOLD_PCT),
+     * not only at the true end — people routinely stop before the credits. Checked on the 10s
+     * tick, so crossing the line marks it even if you back out right after.
+     */
+    private fun maybeMarkWatched() {
+        if (currentWatched) return
+        if (currentProgressPct() >= WATCHED_THRESHOLD_PCT) markCurrentWatched()
+    }
+
     // ---- SimKL scrobble (cross-device sync) --------------------------------
 
     /** A history-entry snapshot of the current playback position, or null when
@@ -687,6 +701,12 @@ class PlayerActivity : ComponentActivity() {
         ServiceLocator.simkl.fireStop(entry, currentProgressPct())
     }
 
+    /** On leaving the player: STOP once watched (SimKL records it as watched and drops
+     *  it from the resume list), otherwise PAUSE to keep the cross-device resume spot. */
+    private fun scrobbleExit() {
+        if (currentWatched) scrobbleStop() else scrobblePause()
+    }
+
     private fun releasePlayer() {
         handler.removeCallbacks(saveTick)
         handler.removeCallbacks(autoAdvance)
@@ -701,6 +721,11 @@ class PlayerActivity : ComponentActivity() {
     }
 
     companion object {
+        // Percent watched at which an item counts as "watched" (locally + a SimKL STOP,
+        // which SimKL treats as watched at >=80%). Matches how streaming apps stop short
+        // of the credits; raise toward 100 to require finishing, lower to mark sooner.
+        private const val WATCHED_THRESHOLD_PCT = 90.0
+
         private const val EXTRA_URL = "url"
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_KEY = "key"

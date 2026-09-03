@@ -68,6 +68,7 @@ import io.debridtv.app.data.cinemeta.Meta
 import io.debridtv.app.data.cinemeta.Video
 import io.debridtv.app.data.scraper.SourceRequest
 import io.debridtv.app.di.ServiceLocator
+import io.debridtv.app.domain.ResolvedStream
 import io.debridtv.app.domain.StreamSource
 import io.debridtv.app.ui.components.TvButton
 import io.debridtv.app.ui.components.TvOutlinedButton
@@ -288,7 +289,37 @@ fun DetailScreen(
         resolveJob = scope.launch {
             try {
                 val start = ServiceLocator.history.get(cid)?.positionMs ?: 0L
-                val resolved = ServiceLocator.resolver.resolve(source, episodeHint) { status = it }
+
+                // Try the picked source, then cascade down the ranked list until one
+                // actually resolves. An uncached/dead source bails in ~15s
+                // (StreamResolver.READY_TIMEOUT_MS) and we move to the next one on our
+                // own — no need to back out and pick manually. BACK cancels the whole
+                // job (resolveJob.cancel()), so the user is never stuck waiting.
+                val candidates = sources.dropWhile { it !== source }.ifEmpty { listOf(source) }
+                var resolved: ResolvedStream? = null
+                var usedSource = source
+                for ((i, cand) in candidates.withIndex()) {
+                    try {
+                        if (i > 0) status = "Trying another source (${i + 1}/${candidates.size})…"
+                        resolved = ServiceLocator.resolver.resolve(cand, episodeHint) { status = it }
+                        usedSource = cand
+                        break
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // This one wouldn't resolve — fall through to the next candidate.
+                    }
+                }
+                if (resolved == null) {
+                    status = null
+                    Toast.makeText(
+                        context,
+                        "Couldn't find a working source — try again later.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return@launch
+                }
+
                 status = "Loading subtitles…"
                 val subs = ServiceLocator.mediaRepo.subtitles(type, cid)
                 status = null
@@ -319,7 +350,7 @@ fun DetailScreen(
                     sourceHashes = sources.map { it.infoHash },
                     sourceNames = sources.map { it.filename },
                     sourceFileIdx = sources.map { it.fileIdx ?: -1 },
-                    sourceIndex = sources.indexOf(source).coerceAtLeast(0),
+                    sourceIndex = sources.indexOf(usedSource).coerceAtLeast(0),
                     epSeason = episodeHint?.first ?: -1,
                     epEpisode = episodeHint?.second ?: -1,
                     imdbId = id,
