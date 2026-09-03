@@ -47,8 +47,14 @@ interface SimklApi {
 
     // ---- Sync playback (resume points) -------------------------------------
 
-    @GET("sync/playback")
-    suspend fun playback(@Header("Authorization") auth: String): List<SimklPlaybackItem>
+    /** Paused playbacks (progress < 80%) for cross-device resume. The endpoint is
+     *  per-type — `movies` or `episodes` — and returns a flat array of sessions each
+     *  carrying a `progress` percent (no runtime). */
+    @GET("sync/playback/{type}")
+    suspend fun playback(
+        @Header("Authorization") auth: String,
+        @Path("type") type: String
+    ): List<SimklPlaybackItem>
 
     // ---- Sync all-items (watched / finished state) -------------------------
 

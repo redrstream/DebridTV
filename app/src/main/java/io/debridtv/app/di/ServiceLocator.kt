@@ -10,6 +10,7 @@ import io.debridtv.app.data.prefs.HistoryStore
 import io.debridtv.app.data.prefs.SettingsStore
 import io.debridtv.app.data.simkl.SimklApi
 import io.debridtv.app.data.simkl.SimklClient
+import io.debridtv.app.data.simkl.SimklTitleInfo
 import io.debridtv.app.data.scraper.ApibayApi
 import io.debridtv.app.data.scraper.ApibayProvider
 import io.debridtv.app.data.scraper.EztvApi
@@ -83,7 +84,22 @@ object ServiceLocator {
      *  this build and an account is linked in Settings. */
     val simkl: SimklClient by lazy {
         SimklClient(simklApi, settings, history) { type, imdb ->
-            mediaRepo.meta(type, imdb)?.poster
+            mediaRepo.meta(type, imdb)?.let { m ->
+                SimklTitleInfo(poster = m.poster, runtimeMin = parseRuntimeMinutes(m.runtime))
+            }
         }
     }
+}
+
+/** Cinemeta reports runtime as a display string ("148 min", "1h 30min", "45 min").
+ *  Pull out total minutes for turning a SimKL progress percent into a resume position. */
+private fun parseRuntimeMinutes(raw: String?): Int? {
+    if (raw.isNullOrBlank()) return null
+    val hours = Regex("(\\d+)\\s*h", RegexOption.IGNORE_CASE).find(raw)?.groupValues?.get(1)?.toIntOrNull()
+    val mins = Regex("(\\d+)\\s*m", RegexOption.IGNORE_CASE).find(raw)?.groupValues?.get(1)?.toIntOrNull()
+    if (hours != null || mins != null) {
+        return (hours ?: 0) * 60 + (mins ?: 0)
+    }
+    // Bare number → assume minutes.
+    return raw.trim().toIntOrNull()
 }

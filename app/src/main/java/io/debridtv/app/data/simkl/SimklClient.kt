@@ -28,13 +28,17 @@ import java.util.TimeZone
  * don't expire). When the id is absent the whole feature is inert and Settings
  * shows "not configured in this build".
  */
+/** Poster + runtime for a title, looked up (Cinemeta-backed) for items first seen on
+ *  another device: the poster stops the Continue Watching card being a blank
+ *  placeholder, and the runtime turns SimKL's progress percent into a resume position
+ *  (the playback endpoint returns a percent, not a duration). */
+data class SimklTitleInfo(val poster: String?, val runtimeMin: Int?)
+
 class SimklClient(
     private val api: SimklApi,
     private val settings: SettingsStore,
     private val history: HistoryStore,
-    // Best-effort poster lookup for shows first seen on another device, so the
-    // Continue Watching card isn't a blank placeholder. Cinemeta-backed.
-    private val posterFor: suspend (type: String, imdb: String) -> String?
+    private val titleInfoFor: suspend (type: String, imdb: String) -> SimklTitleInfo?
 ) {
     private val clientId = BuildConfig.SIMKL_CLIENT_ID
 
@@ -151,8 +155,11 @@ class SimklClient(
         val now = System.currentTimeMillis()
         if (now - settings.simklLastPullAt() < minIntervalMs) return
         settings.setSimklLastPullAt(now)
+        // The read endpoint is per-type (movies / episodes) and returns a flat array.
         val items = try {
-            withContext(Dispatchers.IO) { api.playback(bearer(token)) }
+            withContext(Dispatchers.IO) {
+                api.playback(bearer(token), "movies") + api.playback(bearer(token), "episodes")
+            }
         } catch (_: Exception) {
             return
         }
@@ -162,15 +169,19 @@ class SimklClient(
             val mapped = mapItem(item) ?: continue
             val existing = history.get(mapped.key)
             if (existing != null && existing.updatedAt >= pausedAt) continue
-            // Turn SimKL's percent into an absolute resume position. Prefer the runtime
-            // SimKL reports; if it's missing, reuse a duration this device already knows
-            // for the title (e.g. an earlier local watch) so the spot still carries,
-            // rather than collapsing progress to 0.
-            val durationMs = ((mapped.runtimeMin ?: 0) * 60_000L)
-                .takeIf { it > 0 } ?: (existing?.durationMs ?: 0L)
-            val positionMs = if (durationMs > 0) (item.progress / 100.0 * durationMs).toLong() else 0L
-            val poster = existing?.poster
-                ?: runCatching { posterFor(mapped.type, mapped.showImdb) }.getOrNull()
+            // The playback endpoint gives a progress PERCENT, not a duration. To turn it
+            // into an absolute resume position we need the runtime: reuse a duration this
+            // device already knows (a prior local play — most accurate), else look it up
+            // from Cinemeta. Without one we can't place the resume point, so skip rather
+            // than store a 0 that would show the item at the very start.
+            val info = if (existing?.durationMs == null || existing.durationMs <= 0L) {
+                runCatching { titleInfoFor(mapped.type, mapped.showImdb) }.getOrNull()
+            } else null
+            val durationMs = existing?.durationMs?.takeIf { it > 0 }
+                ?: ((info?.runtimeMin ?: 0) * 60_000L)
+            if (durationMs <= 0L) continue
+            val positionMs = (item.progress / 100.0 * durationMs).toLong()
+            val poster = existing?.poster ?: info?.poster
             history.upsert(
                 HistoryEntry(
                     key = mapped.key,
@@ -261,7 +272,8 @@ class SimklClient(
         // existing watched mark or a rewatch in progress here that's newer than this
         // remote watch. Only a strictly-newer remote watched state is applied.
         if (existing != null && existing.updatedAt >= stamp) return
-        val poster = existing?.poster ?: runCatching { posterFor(type, showImdb) }.getOrNull()
+        val poster = existing?.poster
+            ?: runCatching { titleInfoFor(type, showImdb) }.getOrNull()?.poster
         history.upsert(
             HistoryEntry(
                 key = key,
@@ -280,8 +292,7 @@ class SimklClient(
         val key: String,
         val type: String,
         val showImdb: String,
-        val title: String,
-        val runtimeMin: Int?
+        val title: String
     )
 
     private fun mapItem(item: SimklPlaybackItem): Mapped? = when (item.type) {
@@ -294,8 +305,7 @@ class SimklClient(
                 key = "$imdb:$season:$number",
                 type = "series",
                 showImdb = imdb,
-                title = item.show.title ?: imdb,
-                runtimeMin = item.episode.runtime
+                title = item.show.title ?: imdb
             )
         }
         "movie" -> {
@@ -305,8 +315,7 @@ class SimklClient(
                 key = imdb,
                 type = "movie",
                 showImdb = imdb,
-                title = item.movie.title ?: imdb,
-                runtimeMin = item.movie.runtime
+                title = item.movie.title ?: imdb
             )
         }
         else -> null
