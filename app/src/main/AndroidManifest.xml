@@ -28,7 +28,7 @@
             android:name=".ui.MainActivity"
             android:exported="true"
             android:screenOrientation="landscape"
-            android:theme="@style/Theme.DebridTV">
+            android:theme="@style/Theme.DebridTV.Splash">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <!-- Shows on the Android TV home screen -->

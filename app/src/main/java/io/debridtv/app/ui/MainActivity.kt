@@ -4,11 +4,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -21,17 +21,22 @@ import io.debridtv.app.ui.screens.LibraryScreen
 import io.debridtv.app.ui.screens.SearchScreen
 import io.debridtv.app.ui.screens.SettingsScreen
 import io.debridtv.app.ui.theme.DebridTvTheme
+import io.debridtv.app.ui.theme.appGradient
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Show the branded splash while the app cold-starts, so the launch reads as a
+        // real app instead of a black flash. Must run before super.onCreate().
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         setContent {
             DebridTvTheme {
-                Surface(
+                // A single subtle gradient behind everything. Screens paint their own
+                // content transparently on top, so this is the app's base backdrop.
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.background),
-                    color = MaterialTheme.colorScheme.background
+                        .background(appGradient())
                 ) {
                     AppNav()
                 }

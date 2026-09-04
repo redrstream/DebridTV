@@ -52,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
@@ -405,6 +406,11 @@ fun DetailScreen(
     }
 
     Box(Modifier.fillMaxSize()) {
+        // Hero backdrop: the title's own artwork, scrimmed so it fades into the page.
+        // The content scrolls over it (it stays put), giving the detail page depth. The
+        // art is already being fetched for this title, so this costs one more image.
+        if (metaLoad == DetailLoad.READY) DetailBackdrop(meta?.background)
+
         if (metaLoad != DetailLoad.READY) {
             Column(Modifier.fillMaxSize().padding(24.dp)) {
                 TvButton(
@@ -601,6 +607,37 @@ fun DetailScreen(
                 }
             )
         }
+    }
+}
+
+/**
+ * The title's background artwork behind the top of the detail page, faded into the
+ * page so the poster + text below stay readable. Drawn once and fixed while the
+ * content scrolls over it. No-op when the title has no background image.
+ */
+@Composable
+private fun DetailBackdrop(url: String?) {
+    if (url.isNullOrBlank()) return
+    val bg = MaterialTheme.colorScheme.background
+    Box(Modifier.fillMaxWidth().height(360.dp)) {
+        AsyncImage(
+            model = url,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            alpha = 0.45f,
+            modifier = Modifier.fillMaxSize()
+        )
+        // Darken toward the bottom so the art dissolves into the solid page colour,
+        // with a light top scrim so the Back/Resume controls read over the artwork.
+        Box(
+            Modifier.fillMaxSize().background(
+                Brush.verticalGradient(
+                    0f to bg.copy(alpha = 0.35f),
+                    0.55f to bg.copy(alpha = 0.85f),
+                    1f to bg
+                )
+            )
+        )
     }
 }
 

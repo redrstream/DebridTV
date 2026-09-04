@@ -33,8 +33,8 @@ android {
         applicationId = "io.debridtv.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 27
-        versionName = "0.1.26"
+        versionCode = 28
+        versionName = "0.1.27"
 
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
     }
@@ -103,6 +103,8 @@ dependencies {
 
     // Lifecycle / Activity / Navigation
     implementation("androidx.core:core-ktx:1.13.1")
+    // Branded splash on cold start (replaces the plain black launch flash)
+    implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")

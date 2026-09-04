@@ -1,0 +1,12 @@
+<!-- Splash glyph: the green play triangle on transparent (the splash window
+     background supplies the dark backdrop). Centred in the 108 viewport so the
+     system's circular splash icon mask frames it cleanly. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#3DDC97"
+        android:pathData="M42,34 L42,74 L78,54 Z" />
+</vector>

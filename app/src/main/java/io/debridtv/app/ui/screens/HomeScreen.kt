@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -224,7 +225,12 @@ fun HomeScreen(nav: NavHostController) {
             )
         }
 
-        LazyColumn(Modifier.fillMaxSize()) {
+        // Bottom padding so the last row can scroll clear of the screen edge and the
+        // focused card in it has room to lift, instead of jamming against the bezel.
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 48.dp)
+        ) {
             if (cwCards.isNotEmpty()) {
                 item {
                     MediaRow(
