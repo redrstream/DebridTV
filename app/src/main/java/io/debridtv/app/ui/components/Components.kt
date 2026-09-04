@@ -97,8 +97,10 @@ fun PosterCard(
         ),
         label = "scale"
     )
+    // Siblings of the focused card dim so the selection reads — but only to 0.78, so
+    // every other title in the row stays clearly visible (0.5 washed them too dark).
     val alpha by animateFloatAsState(
-        targetValue = if (dimmed && !focused) 0.5f else 1f,
+        targetValue = if (dimmed && !focused) 0.78f else 1f,
         label = "alpha"
     )
 

@@ -363,41 +363,6 @@ fun TopBar(nav: NavHostController, current: String) {
         NavButton("Settings", Icons.Filled.Settings) {
             if (current != Routes.SETTINGS) nav.navigate(Routes.SETTINGS)
         }
-        // Push the clock to the far right, like the reference designs.
-        Spacer(Modifier.weight(1f))
-        ClockDisplay()
-    }
-}
-
-// A quiet time + date in the top-right corner — a small "premium dashboard" cue.
-// Refreshes every 30s (cheap) so the minute is never stale.
-@Composable
-private fun ClockDisplay() {
-    var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(30_000)
-        }
-    }
-    val time = remember(now) {
-        java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(now)
-    }
-    val date = remember(now) {
-        java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.getDefault()).format(now)
-    }
-    Column(horizontalAlignment = Alignment.End) {
-        Text(
-            time,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        Text(
-            date,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
