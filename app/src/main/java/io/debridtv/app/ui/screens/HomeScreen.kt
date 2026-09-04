@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -57,7 +58,9 @@ import io.debridtv.app.di.ServiceLocator
 import io.debridtv.app.ui.Routes
 import io.debridtv.app.ui.components.CardItem
 import io.debridtv.app.ui.components.MediaRow
+import io.debridtv.app.ui.components.SectionHeader
 import io.debridtv.app.ui.components.TvButton
+import io.debridtv.app.ui.components.TvGhostButton
 import io.debridtv.app.ui.components.TvOutlinedButton
 import io.debridtv.app.ui.components.toCard
 import io.debridtv.app.ui.player.PlayerActivity
@@ -338,7 +341,7 @@ fun TopBar(nav: NavHostController, current: String) {
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         if (current != Routes.HOME) {
-            TvButton(onClick = { nav.popBackStack() }) {
+            TvGhostButton(onClick = { nav.popBackStack() }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back",
                     modifier = Modifier.padding(end = 6.dp))
                 Text("Back")
@@ -360,12 +363,47 @@ fun TopBar(nav: NavHostController, current: String) {
         NavButton("Settings", Icons.Filled.Settings) {
             if (current != Routes.SETTINGS) nav.navigate(Routes.SETTINGS)
         }
+        // Push the clock to the far right, like the reference designs.
+        Spacer(Modifier.weight(1f))
+        ClockDisplay()
+    }
+}
+
+// A quiet time + date in the top-right corner — a small "premium dashboard" cue.
+// Refreshes every 30s (cheap) so the minute is never stale.
+@Composable
+private fun ClockDisplay() {
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(30_000)
+        }
+    }
+    val time = remember(now) {
+        java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(now)
+    }
+    val date = remember(now) {
+        java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.getDefault()).format(now)
+    }
+    Column(horizontalAlignment = Alignment.End) {
+        Text(
+            time,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Text(
+            date,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
 @Composable
 private fun NavButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
-    TvButton(onClick = onClick) {
+    TvGhostButton(onClick = onClick) {
         Icon(icon, contentDescription = null, modifier = Modifier.padding(end = 6.dp))
         Text(label)
     }
@@ -400,14 +438,11 @@ private fun GenreRow(title: String, type: String, genre: String, nav: NavHostCon
             // row's worth of height so the layout stays stable and the fetch
             // isn't cancelled by recycling. Cards pop in when they arrive.
             Column(Modifier.padding(vertical = 10.dp)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground,
+                SectionHeader(
+                    title = title,
                     modifier = Modifier.padding(start = 24.dp, bottom = 6.dp)
                 )
-                androidx.compose.foundation.layout.Spacer(Modifier.fillMaxWidth().height(226.dp))
+                Spacer(Modifier.fillMaxWidth().height(226.dp))
             }
         }
         else -> if (loaded.isNotEmpty()) {

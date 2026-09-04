@@ -10,10 +10,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,14 +27,15 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,7 +44,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
@@ -54,6 +57,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import io.debridtv.app.data.cinemeta.Meta
+import io.debridtv.app.ui.theme.Accent
+import io.debridtv.app.ui.theme.accentGlow
+import io.debridtv.app.ui.theme.primaryButtonBrush
 
 data class CardItem(val id: String, val type: String, val title: String, val poster: String?)
 
@@ -77,6 +83,7 @@ fun PosterCard(
     val focused by interaction.collectIsFocusedAsState()
     LaunchedEffect(focused) { onFocusChanged?.invoke(focused) }
 
+    val cardShape = RoundedCornerShape(12.dp)
 
     // A modest, non-bouncy lift. dampingRatio 0.55 (underdamped) used to overshoot and
     // wobble; combined with center-origin scaling that made every card bob up AND down as
@@ -93,10 +100,6 @@ fun PosterCard(
     val alpha by animateFloatAsState(
         targetValue = if (dimmed && !focused) 0.5f else 1f,
         label = "alpha"
-    )
-    val elevation by animateFloatAsState(
-        targetValue = if (focused) 20f else 0f,
-        label = "elevation"
     )
 
     Column(
@@ -151,15 +154,16 @@ fun PosterCard(
                         scaleY = scale
                         transformOrigin = TransformOrigin(0.5f, 1f)
                     }
-                    // clip = false lets the shadow bleed past the poster edges so the
-                    // focused card visibly floats above its neighbours.
-                    .shadow(elevation.dp, RoundedCornerShape(10.dp), clip = false)
-                    .clip(RoundedCornerShape(10.dp))
+                    // A brand-coloured glow blooms behind the focused card so it lifts off
+                    // the row (the premium tell). clip=false in accentGlow lets it bleed past
+                    // the edges. Non-focused cards get a faint hairline for a "framed" look.
+                    .accentGlow(focused, cardShape, elevation = 24)
+                    .clip(cardShape)
                     .background(MaterialTheme.colorScheme.surfaceVariant)
                     .border(
-                        width = if (focused) 3.dp else 0.dp,
-                        color = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(10.dp)
+                        width = if (focused) 2.5.dp else 1.dp,
+                        color = if (focused) Accent else Color.White.copy(alpha = 0.08f),
+                        shape = cardShape
                     )
             ) {
                 if (!item.poster.isNullOrBlank()) {
@@ -194,15 +198,15 @@ fun PosterCard(
             color = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp)
+            modifier = Modifier.padding(top = 8.dp, start = 2.dp, end = 2.dp)
         )
     }
 }
 
 // A bright, high-contrast focus ring. On a 10-foot TV UI the Material default focus
 // overlay is nearly invisible on already-filled green buttons; a white ring reads
-// clearly against both the green fill and the dark background. Used by every button
-// so "which control am I on" is unambiguous everywhere.
+// clearly against both the green fill and the dark background. Used by the custom
+// chips (Play/Queue/Resume) so "which control am I on" is unambiguous.
 fun Modifier.tvFocusRing(focused: Boolean, shape: Shape = CircleShape): Modifier =
     this.border(
         width = if (focused) 3.dp else 0.dp,
@@ -210,8 +214,12 @@ fun Modifier.tvFocusRing(focused: Boolean, shape: Shape = CircleShape): Modifier
         shape = shape
     )
 
-// Filled button with a clear TV focus state (white ring + slight lift). Drop-in for
-// Material3 Button across the app.
+// A pill button with a gradient fill + brand glow on focus — the "cooler" button look
+// from the reference designs. Drop-in for the old Material3 Button across the app.
+// Built as a plain clickable Row (not a Material Button) so it can carry a real gradient
+// and a coloured glow; the Row is the focusable node and never scales, so it stays clear
+// of the D-pad focus-rect trap. Content colour + a button-sized text style are supplied
+// so existing `Text("…")` / `Icon(…)` call sites render as before.
 @Composable
 fun TvButton(
     onClick: () -> Unit,
@@ -221,18 +229,38 @@ fun TvButton(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
-    // No graphicsLayer scale here: a scale on the focusable node distorts the focus rect
-    // that D-pad search reads and can trap vertical navigation. The white ring is the cue.
-    Button(
-        onClick = onClick,
-        enabled = enabled,
-        interactionSource = interaction,
-        modifier = modifier.tvFocusRing(focused),
-        content = content
-    )
+    val shape = CircleShape
+    Row(
+        modifier = modifier
+            .accentGlow(enabled && focused, shape, elevation = 14)
+            .clip(shape)
+            .background(primaryButtonBrush(focused))
+            .border(
+                width = if (focused) 2.dp else 0.dp,
+                color = if (focused) Color.White else Color.Transparent,
+                shape = shape
+            )
+            .graphicsLayer { this.alpha = if (enabled) 1f else 0.5f }
+            .then(
+                if (enabled) Modifier.clickable(
+                    interactionSource = interaction,
+                    indication = null,
+                    onClick = onClick
+                ) else Modifier
+            )
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        CompositionLocalProvider(
+            LocalContentColor provides MaterialTheme.colorScheme.onPrimary,
+            LocalTextStyle provides MaterialTheme.typography.labelLarge
+        ) { content() }
+    }
 }
 
-// Outlined variant with the same focus ring so it's obvious even against its own outline.
+// Outlined variant: an accent-bordered pill that fills in (with the same gradient +
+// glow) when focused, so it's obvious on a 10-foot screen which control is active.
 @Composable
 fun TvOutlinedButton(
     onClick: () -> Unit,
@@ -242,13 +270,96 @@ fun TvOutlinedButton(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
-    OutlinedButton(
-        onClick = onClick,
-        enabled = enabled,
-        interactionSource = interaction,
-        modifier = modifier.tvFocusRing(focused),
-        content = content
-    )
+    val shape = CircleShape
+    val fg = if (focused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary
+    Row(
+        modifier = modifier
+            .accentGlow(enabled && focused, shape, elevation = 14)
+            .clip(shape)
+            .then(if (focused) Modifier.background(primaryButtonBrush(true)) else Modifier)
+            .border(
+                width = 1.5.dp,
+                color = if (focused) Color.White else MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
+                shape = shape
+            )
+            .graphicsLayer { this.alpha = if (enabled) 1f else 0.5f }
+            .then(
+                if (enabled) Modifier.clickable(
+                    interactionSource = interaction,
+                    indication = null,
+                    onClick = onClick
+                ) else Modifier
+            )
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        CompositionLocalProvider(
+            LocalContentColor provides fg,
+            LocalTextStyle provides MaterialTheme.typography.labelLarge
+        ) { content() }
+    }
+}
+
+// A quiet "ghost" pill for navigation (Search / Library / Settings / Back). It reads as
+// a subtle dark chip until focused, then lights up with the same green gradient + glow —
+// so the top bar isn't a wall of green and the control you're on is unmistakable. Filled
+// green pills (TvButton) are reserved for real actions like Play / Save.
+@Composable
+fun TvGhostButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable RowScope.() -> Unit
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val shape = CircleShape
+    Row(
+        modifier = modifier
+            .accentGlow(focused, shape, elevation = 14)
+            .clip(shape)
+            .background(
+                if (focused) MaterialTheme.colorScheme.surfaceVariant else Color.White.copy(alpha = 0.05f)
+            )
+            .then(if (focused) Modifier.background(primaryButtonBrush(true)) else Modifier)
+            .border(
+                width = if (focused) 2.dp else 1.dp,
+                color = if (focused) Color.White else Color.White.copy(alpha = 0.10f),
+                shape = shape
+            )
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        CompositionLocalProvider(
+            LocalContentColor provides
+                if (focused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onBackground,
+            LocalTextStyle provides MaterialTheme.typography.labelLarge
+        ) { content() }
+    }
+}
+
+// A section title with a short accent bar beside it — the small "designed" cue used
+// before every row in the reference designs. Reused by every screen's row/section head.
+@Composable
+fun SectionHeader(title: String, modifier: Modifier = Modifier) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier) {
+        Box(
+            Modifier
+                .height(20.dp)
+                .width(4.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(MaterialTheme.colorScheme.primary)
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+    }
 }
 
 @Composable
@@ -270,11 +381,8 @@ fun MediaRow(
     // stays inside the current LazyRow and bounces left/right between sibling cards
     // instead of dropping to the row below.
     Column(Modifier.padding(vertical = 10.dp).focusGroup()) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground,
+        SectionHeader(
+            title = title,
             // Extra bottom gap gives the focused card room to rise upward without
             // overlapping this title.
             modifier = Modifier.padding(start = 24.dp, bottom = 16.dp)

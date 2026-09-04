@@ -71,9 +71,12 @@ import io.debridtv.app.data.scraper.SourceRequest
 import io.debridtv.app.di.ServiceLocator
 import io.debridtv.app.domain.ResolvedStream
 import io.debridtv.app.domain.StreamSource
+import io.debridtv.app.ui.components.SectionHeader
 import io.debridtv.app.ui.components.TvButton
+import io.debridtv.app.ui.components.TvGhostButton
 import io.debridtv.app.ui.components.TvOutlinedButton
 import io.debridtv.app.ui.components.tvFocusRing
+import io.debridtv.app.ui.theme.accentGlow
 import io.debridtv.app.ui.player.PlayerActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -413,7 +416,7 @@ fun DetailScreen(
 
         if (metaLoad != DetailLoad.READY) {
             Column(Modifier.fillMaxSize().padding(24.dp)) {
-                TvButton(
+                TvGhostButton(
                     onClick = { nav.popBackStack() },
                     modifier = Modifier.focusRequester(backFocus).padding(bottom = 12.dp)
                 ) {
@@ -443,7 +446,7 @@ fun DetailScreen(
         } else {
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(24.dp)) {
             item {
-                TvButton(
+                TvGhostButton(
                     onClick = { nav.popBackStack() },
                     modifier = Modifier
                         .focusRequester(backFocus)
@@ -472,8 +475,7 @@ fun DetailScreen(
                 val seasons = meta?.videos?.mapNotNull { it.season }?.filter { it > 0 }?.distinct()?.sorted().orEmpty()
                 if (seasons.isNotEmpty()) {
                     item {
-                        Text("Seasons", fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onBackground,
+                        SectionHeader("Seasons",
                             modifier = Modifier.padding(top = 16.dp, bottom = 6.dp))
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(seasons) { s ->
@@ -499,8 +501,7 @@ fun DetailScreen(
                         val epHeader = selectedSeason
                             ?.let { "Season $it · ${episodes.size} episodes" }
                             ?: "Episodes"
-                        Text(epHeader, fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onBackground,
+                        SectionHeader(epHeader,
                             modifier = Modifier.padding(top = 16.dp, bottom = 6.dp))
                     }
                     // Episodes as a horizontal row (like the season selector) so picking
@@ -543,10 +544,8 @@ fun DetailScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 6.dp)
                 ) {
-                    Text(
-                        if (isSeries && cv == null) "Pick an episode to see sources" else "Sources",
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground
+                    SectionHeader(
+                        if (isSeries && cv == null) "Pick an episode to see sources" else "Sources"
                     )
                     // Reliable, D-pad-reachable way to toggle the selected episode
                     // watched (long-pressing an episode row does the same).
@@ -723,12 +722,14 @@ private fun ActionChip(
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     // No graphicsLayer scale on this clickable Row: it would distort the focus rect and
-    // trap D-pad navigation between stacked source rows. Colour + ring signal focus.
+    // trap D-pad navigation between stacked source rows. Colour + glow + ring signal focus.
+    val chipShape = RoundedCornerShape(24.dp)
     Row(
         Modifier
-            .clip(RoundedCornerShape(24.dp))
+            .accentGlow(focused, chipShape, elevation = 12)
+            .clip(chipShape)
             .background(bg)
-            .tvFocusRing(focused, RoundedCornerShape(24.dp))
+            .tvFocusRing(focused, chipShape)
             .clickable(interactionSource = interaction, indication = null) { onClick() }
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -749,12 +750,14 @@ private fun ResumeButton(
     val focused by interaction.collectIsFocusedAsState()
     val bg = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primaryContainer
     val fg = if (focused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onPrimaryContainer
+    val resumeShape = RoundedCornerShape(24.dp)
     Row(
         Modifier
             .padding(bottom = 12.dp)
-            .clip(RoundedCornerShape(24.dp))
+            .accentGlow(focused, resumeShape, elevation = 14)
+            .clip(resumeShape)
             .background(bg)
-            .tvFocusRing(focused, RoundedCornerShape(24.dp))
+            .tvFocusRing(focused, resumeShape)
             .focusRequester(focusRequester)
             .clickable(interactionSource = interaction, indication = null) { onClick() }
             .padding(horizontal = 20.dp, vertical = 12.dp),
