@@ -257,32 +257,34 @@ fun HomeScreen(nav: NavHostController) {
     val onFeatured: (CardItem) -> Unit = { featured = it }
 
     Box(Modifier.fillMaxSize()) {
-    Column(Modifier.fillMaxSize().padding(top = 20.dp)) {
-        TopBar(nav, current = Routes.HOME)
-
-        if (apiKey.isNullOrBlank()) {
-            Text(
-                "No AllDebrid API key yet — open Settings to add it before playing.",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-            )
+    Column(Modifier.fillMaxSize()) {
+        // Featured/hero region: the top of Home. The backdrop art is full-bleed to the
+        // very top — drawn behind the logo, nav and (when shown) the API-key notice —
+        // with the focused title's details anchored to its bottom. Display-only (no
+        // focusable controls) so it can't trap the D-pad. The notice overlays the art
+        // instead of pushing anything down, so the layout is identical whether or not
+        // it shows (it's usually absent once a key is saved).
+        Box(Modifier.fillMaxWidth().weight(1.0f)) {
+            HeroBackdrop(meta = featuredMeta)
+            Column(Modifier.fillMaxSize().padding(top = 20.dp)) {
+                TopBar(nav, current = Routes.HOME)
+                if (apiKey.isNullOrBlank()) {
+                    Text(
+                        "No AllDebrid API key yet — open Settings to add it before playing.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                HeroDetails(item = featured, meta = featuredMeta)
+            }
         }
-
-        // Featured/hero panel: the top portion of Home shows the currently-focused
-        // title's art + details (Netflix / Prime / Stremio style), updating as you move
-        // through the rows. It's display-only — no focusable controls — so it can't trap
-        // the D-pad. Given ~half the screen; the rows scroll in the rest.
-        HomeHero(
-            item = featured,
-            meta = featuredMeta,
-            modifier = Modifier.fillMaxWidth().weight(0.95f)
-        )
 
         // Bottom padding so the last row can scroll clear of the screen edge and the
         // focused card in it has room to lift, instead of jamming against the bezel.
         LazyColumn(
-            modifier = Modifier.fillMaxWidth().weight(1.15f),
+            modifier = Modifier.fillMaxWidth().weight(1.1f),
             contentPadding = PaddingValues(bottom = 48.dp)
         ) {
             if (cwCards.isNotEmpty()) {
@@ -395,19 +397,16 @@ fun HomeScreen(nav: NavHostController) {
 private enum class HomeLoad { LOADING, READY, ERROR }
 
 /**
- * The featured/hero panel at the top of Home. Shows the currently-focused title's
- * backdrop art, name, and details (year · runtime · ★rating · genres) plus a short
- * synopsis — the Netflix / Prime / Stremio "billboard" that follows your selection.
- *
- * Purely presentational: it holds no focusable controls, so it can never trap the
- * D-pad. The title text appears immediately from the focused card; the art and the
- * richer lines fill in once [meta] loads (fetched, debounced + cached, by Home).
+ * Full-bleed backdrop art for the featured title, drawn behind the whole top region
+ * (logo, nav, notice, and the details below). Scrims keep the overlaid controls and
+ * text readable and dissolve the art into the page at top and bottom, so there's no
+ * hard edge. No-op (transparent) until the focused title's [meta] with art loads.
  */
 @Composable
-private fun HomeHero(item: CardItem?, meta: Meta?, modifier: Modifier = Modifier) {
+private fun HeroBackdrop(meta: Meta?, modifier: Modifier = Modifier) {
     val bg = MaterialTheme.colorScheme.background
-    Box(modifier) {
-        val backdrop = meta?.background
+    val backdrop = meta?.background
+    Box(modifier.fillMaxSize()) {
         if (!backdrop.isNullOrBlank()) {
             AsyncImage(
                 model = backdrop,
@@ -415,76 +414,88 @@ private fun HomeHero(item: CardItem?, meta: Meta?, modifier: Modifier = Modifier
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
-            // Left scrim so the text column reads over the art…
+            // Left scrim so the details column reads over the art.
             Box(
                 Modifier.fillMaxSize().background(
                     Brush.horizontalGradient(
                         0f to bg.copy(alpha = 0.92f),
-                        0.35f to bg.copy(alpha = 0.70f),
-                        0.70f to bg.copy(alpha = 0.15f),
+                        0.35f to bg.copy(alpha = 0.68f),
+                        0.72f to bg.copy(alpha = 0.12f),
                         1f to Color.Transparent
                     )
                 )
             )
-            // …and a bottom scrim so the art dissolves into the rows below.
+            // Top scrim so the logo / nav / notice read over the art, and a bottom
+            // scrim so the art dissolves into the rows — no hard cut line either end.
             Box(
                 Modifier.fillMaxSize().background(
                     Brush.verticalGradient(
-                        0f to Color.Transparent,
-                        0.55f to bg.copy(alpha = 0.40f),
+                        0f to bg.copy(alpha = 0.80f),
+                        0.16f to bg.copy(alpha = 0.30f),
+                        0.48f to Color.Transparent,
+                        0.82f to bg.copy(alpha = 0.55f),
                         1f to bg
                     )
                 )
             )
         }
-        if (item != null) {
-            Column(
-                Modifier.align(Alignment.BottomStart)
-                    .fillMaxWidth(0.62f)
-                    .padding(start = 40.dp, end = 24.dp, bottom = 18.dp)
-            ) {
-                Text(
-                    if ((meta?.type ?: item.type) == "series") "SERIES" else "FILM",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    meta?.name?.ifBlank { item.title } ?: item.title,
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 6.dp)
-                )
-                val sub = listOfNotNull(
-                    meta?.releaseInfo,
-                    meta?.runtime,
-                    meta?.imdbRating?.let { "★ $it" },
-                    meta?.genres?.take(3)?.joinToString(" · ")?.ifBlank { null }
-                ).joinToString("   ·   ")
-                if (sub.isNotBlank()) {
-                    Text(
-                        sub,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 10.dp)
-                    )
-                }
-                meta?.description?.let {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 10.dp)
-                    )
-                }
-            }
+    }
+}
+
+/**
+ * The featured title's text block — name, a details line (year · runtime · ★rating ·
+ * genres) and a short synopsis — anchored to the bottom of the hero region over the
+ * backdrop. The name shows immediately from the focused card; the rest fills in once
+ * [meta] loads. Purely presentational (no focusable controls → never traps the D-pad).
+ */
+@Composable
+private fun HeroDetails(item: CardItem?, meta: Meta?, modifier: Modifier = Modifier) {
+    if (item == null) return
+    Column(
+        modifier
+            .fillMaxWidth(0.62f)
+            .padding(start = 40.dp, end = 24.dp, bottom = 18.dp)
+    ) {
+        Text(
+            if ((meta?.type ?: item.type) == "series") "SERIES" else "FILM",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            meta?.name?.ifBlank { item.title } ?: item.title,
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 6.dp)
+        )
+        val sub = listOfNotNull(
+            meta?.releaseInfo,
+            meta?.runtime,
+            meta?.imdbRating?.let { "★ $it" },
+            meta?.genres?.take(3)?.joinToString(" · ")?.ifBlank { null }
+        ).joinToString("   ·   ")
+        if (sub.isNotBlank()) {
+            Text(
+                sub,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 10.dp)
+            )
+        }
+        meta?.description?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 10.dp)
+            )
         }
     }
 }

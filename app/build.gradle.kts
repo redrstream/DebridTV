@@ -33,8 +33,8 @@ android {
         applicationId = "io.debridtv.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 31
-        versionName = "0.1.30"
+        versionCode = 32
+        versionName = "0.1.31"
 
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
     }
