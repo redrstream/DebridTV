@@ -54,6 +54,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import io.debridtv.app.data.cinemeta.Meta
@@ -77,6 +78,8 @@ fun PosterCard(
     // When another card in the same row is focused, non-focused cards dim so the
     // selection pops. Driven by MediaRow.
     dimmed: Boolean = false,
+    cardWidth: Dp = 140.dp,
+    posterHeight: Dp = 200.dp,
     onFocusChanged: ((Boolean) -> Unit)? = null
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -106,7 +109,7 @@ fun PosterCard(
 
     Column(
         modifier = modifier
-            .width(140.dp)
+            .width(cardWidth)
             // Dimming (alpha) only — an identity transform otherwise. IMPORTANT: the focus
             // lift is scaled on the INNER visual box below, never here. A graphicsLayer
             // scale on this Column (an ancestor of the focusable poster) distorts the focus
@@ -120,7 +123,7 @@ fun PosterCard(
             // so its focus rect is undistorted; only the inner box scales.
             Modifier
                 .fillMaxWidth()
-                .height(200.dp)
+                .height(posterHeight)
                 // Long-press to remove. Compose's combinedClickable(onLongClick=…) only
                 // fires from a TOUCH long-press — on a TV remote the D-pad center is a key
                 // event, so it never triggered. We detect the hold ourselves: on the key
@@ -370,6 +373,14 @@ fun MediaRow(
     items: List<CardItem>,
     progressFor: (CardItem) -> Float = { 0f },
     onLongClick: ((CardItem) -> Unit)? = null,
+    // Fires when a card in this row gains focus, so the caller (Home) can drive a
+    // featured/hero panel that follows the selection. Display-only — it never moves
+    // focus, so the D-pad behaviour is unaffected.
+    onItemFocused: ((CardItem) -> Unit)? = null,
+    // Poster size for this row. Home uses a slightly smaller card so a full row +
+    // its header fit under the hero panel; other screens keep the default.
+    cardWidth: Dp = 140.dp,
+    posterHeight: Dp = 200.dp,
     onClick: (CardItem) -> Unit
 ) {
     if (items.isEmpty()) return
@@ -399,9 +410,13 @@ fun MediaRow(
                     modifier = Modifier.padding(end = 14.dp),
                     onLongClick = onLongClick?.let { cb -> { cb(item) } },
                     dimmed = rowFocused,
+                    cardWidth = cardWidth,
+                    posterHeight = posterHeight,
                     onFocusChanged = { f ->
-                        if (f) focusedKey = key
-                        else if (focusedKey == key) focusedKey = null
+                        if (f) {
+                            focusedKey = key
+                            onItemFocused?.invoke(item)
+                        } else if (focusedKey == key) focusedKey = null
                     }
                 )
             }

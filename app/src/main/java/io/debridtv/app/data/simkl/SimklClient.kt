@@ -167,6 +167,11 @@ class SimklClient(
             if (item.progress <= 0.0) continue
             val pausedAt = parseIso(item.paused_at) ?: continue
             val mapped = mapItem(item) ?: continue
+            // If the user removed this from Continue Watching here, don't let a stale
+            // remote resume point drag it back. A strictly-newer remote spot (watched
+            // again elsewhere) still gets through and lifts the tombstone via upsert.
+            val dismissedAt = history.dismissedAt(mapped.showImdb)
+            if (dismissedAt != null && pausedAt <= dismissedAt) continue
             val existing = history.get(mapped.key)
             if (existing != null && existing.updatedAt >= pausedAt) continue
             // The playback endpoint gives a progress PERCENT, not a duration. To turn it
@@ -268,6 +273,11 @@ class SimklClient(
     ) {
         val existing = history.get(key)
         val stamp = watchedAt ?: System.currentTimeMillis()
+        // Respect a Continue-Watching dismissal: if the user removed this show/movie
+        // here, don't re-add it from a remote watched mark that isn't newer than the
+        // dismissal. (A newer remote watch still applies and clears the tombstone.)
+        val dismissedAt = history.dismissedAt(showImdb)
+        if (dismissedAt != null && stamp <= dismissedAt) return
         // Skip if what we have locally is already at least as fresh — whether it's an
         // existing watched mark or a rewatch in progress here that's newer than this
         // remote watch. Only a strictly-newer remote watched state is applied.

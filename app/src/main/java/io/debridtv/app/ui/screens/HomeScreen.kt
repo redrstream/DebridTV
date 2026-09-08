@@ -35,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -44,11 +45,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import io.debridtv.app.data.cinemeta.Meta
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -74,6 +80,12 @@ import io.debridtv.app.ui.player.PlayerActivity
 private const val FOREGROUND_PULL_BACKSTOP_MS = 5 * 60 * 1000L
 private const val FOREGROUND_PULL_MIN_INTERVAL_MS = 20_000L
 
+// Home posters are a touch smaller than elsewhere so a full row plus its header fits
+// in the space below the hero panel (and more of each row is visible at once). Other
+// screens (Search / Library) keep MediaRow's default 140×200.
+private val HOME_CARD_W = 116.dp
+private val HOME_CARD_H = 166.dp
+
 @Composable
 fun HomeScreen(nav: NavHostController) {
     val repo = ServiceLocator.mediaRepo
@@ -89,6 +101,13 @@ fun HomeScreen(nav: NavHostController) {
     var series by remember { mutableStateOf<List<CardItem>>(emptyList()) }
     var rowsState by remember { mutableStateOf(HomeLoad.LOADING) }
     val retryFocus = remember { FocusRequester() }
+
+    // The title shown in the hero panel — whichever poster currently holds focus.
+    // Display-only; it never affects focus, so D-pad navigation is untouched.
+    var featured by remember { mutableStateOf<CardItem?>(null) }
+    var featuredMeta by remember { mutableStateOf<Meta?>(null) }
+    // Cache metadata by title so re-focusing an already-seen poster is instant.
+    val metaCache = remember { mutableStateMapOf<String, Meta>() }
 
     // Pull cross-device resume points from SimKL (if connected + enabled) so
     // Continue Watching reflects what you were watching on another TV. Best-effort
@@ -215,6 +234,28 @@ fun HomeScreen(nav: NavHostController) {
     val cwCards = cwList.map { it.first }
     val cwProgress = cwList.associate { (it.first.type + it.first.id) to it.second }
 
+    // Populate the hero the moment Home paints (nothing is focused on cold start):
+    // default to the first Continue Watching card, else the first Popular movie.
+    LaunchedEffect(cwCards, movies) {
+        if (featured == null) featured = cwCards.firstOrNull() ?: movies.firstOrNull()
+    }
+
+    // Fetch the focused title's metadata for the hero. Debounced (220ms) so fast
+    // scrolling doesn't fire a request per poster; cached so a revisit is instant;
+    // and strictly metadata — this NEVER scrapes streams (those still load only when
+    // you open a title). Cinemeta /meta is disk-cached (~3h) on top of this.
+    LaunchedEffect(featured?.type, featured?.id) {
+        val f = featured ?: return@LaunchedEffect
+        val ck = f.type + f.id
+        metaCache[ck]?.let { featuredMeta = it; return@LaunchedEffect }
+        delay(220)              // moving focus again cancels + restarts this first
+        featuredMeta = null     // committed to loading this one → drop the stale panel
+        val m = runCatching { repo.meta(f.type, f.id) }.getOrNull()
+        if (m != null) { metaCache[ck] = m; featuredMeta = m }
+    }
+
+    val onFeatured: (CardItem) -> Unit = { featured = it }
+
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().padding(top = 20.dp)) {
         TopBar(nav, current = Routes.HOME)
@@ -228,10 +269,20 @@ fun HomeScreen(nav: NavHostController) {
             )
         }
 
+        // Featured/hero panel: the top portion of Home shows the currently-focused
+        // title's art + details (Netflix / Prime / Stremio style), updating as you move
+        // through the rows. It's display-only — no focusable controls — so it can't trap
+        // the D-pad. Given ~half the screen; the rows scroll in the rest.
+        HomeHero(
+            item = featured,
+            meta = featuredMeta,
+            modifier = Modifier.fillMaxWidth().weight(0.95f)
+        )
+
         // Bottom padding so the last row can scroll clear of the screen edge and the
         // focused card in it has room to lift, instead of jamming against the bezel.
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxWidth().weight(1.15f),
             contentPadding = PaddingValues(bottom = 48.dp)
         ) {
             if (cwCards.isNotEmpty()) {
@@ -241,6 +292,9 @@ fun HomeScreen(nav: NavHostController) {
                         items = cwCards,
                         progressFor = { card -> cwProgress[card.type + card.id] ?: 0f },
                         onLongClick = { card -> removeTarget = card },
+                        onItemFocused = onFeatured,
+                        cardWidth = HOME_CARD_W,
+                        posterHeight = HOME_CARD_H,
                         onClick = { card ->
                             when (card.type) {
                                 // Series cards carry the bare show id; DetailScreen's
@@ -286,15 +340,21 @@ fun HomeScreen(nav: NavHostController) {
                 }
                 HomeLoad.READY -> {
                     item {
-                        MediaRow("Popular Movies", movies) { nav.navigate(Routes.detail(it.type, it.id)) }
+                        MediaRow("Popular Movies", movies, onItemFocused = onFeatured,
+                            cardWidth = HOME_CARD_W, posterHeight = HOME_CARD_H) {
+                            nav.navigate(Routes.detail(it.type, it.id))
+                        }
                     }
                     item {
-                        MediaRow("Popular Series", series) { nav.navigate(Routes.detail(it.type, it.id)) }
+                        MediaRow("Popular Series", series, onItemFocused = onFeatured,
+                            cardWidth = HOME_CARD_W, posterHeight = HOME_CARD_H) {
+                            nav.navigate(Routes.detail(it.type, it.id))
+                        }
                     }
                     // Genre rows are lazy: each only hits Cinemeta once it scrolls
                     // into view, so the home screen's first paint stays fast.
                     items(GENRE_ROWS, key = { it.type + it.genre }) { g ->
-                        GenreRow(g.title, g.type, g.genre, nav)
+                        GenreRow(g.title, g.type, g.genre, nav, onFeatured)
                     }
                 }
             }
@@ -333,6 +393,101 @@ fun HomeScreen(nav: NavHostController) {
 }
 
 private enum class HomeLoad { LOADING, READY, ERROR }
+
+/**
+ * The featured/hero panel at the top of Home. Shows the currently-focused title's
+ * backdrop art, name, and details (year · runtime · ★rating · genres) plus a short
+ * synopsis — the Netflix / Prime / Stremio "billboard" that follows your selection.
+ *
+ * Purely presentational: it holds no focusable controls, so it can never trap the
+ * D-pad. The title text appears immediately from the focused card; the art and the
+ * richer lines fill in once [meta] loads (fetched, debounced + cached, by Home).
+ */
+@Composable
+private fun HomeHero(item: CardItem?, meta: Meta?, modifier: Modifier = Modifier) {
+    val bg = MaterialTheme.colorScheme.background
+    Box(modifier) {
+        val backdrop = meta?.background
+        if (!backdrop.isNullOrBlank()) {
+            AsyncImage(
+                model = backdrop,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+            // Left scrim so the text column reads over the art…
+            Box(
+                Modifier.fillMaxSize().background(
+                    Brush.horizontalGradient(
+                        0f to bg.copy(alpha = 0.92f),
+                        0.35f to bg.copy(alpha = 0.70f),
+                        0.70f to bg.copy(alpha = 0.15f),
+                        1f to Color.Transparent
+                    )
+                )
+            )
+            // …and a bottom scrim so the art dissolves into the rows below.
+            Box(
+                Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        0.55f to bg.copy(alpha = 0.40f),
+                        1f to bg
+                    )
+                )
+            )
+        }
+        if (item != null) {
+            Column(
+                Modifier.align(Alignment.BottomStart)
+                    .fillMaxWidth(0.62f)
+                    .padding(start = 40.dp, end = 24.dp, bottom = 18.dp)
+            ) {
+                Text(
+                    if ((meta?.type ?: item.type) == "series") "SERIES" else "FILM",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    meta?.name?.ifBlank { item.title } ?: item.title,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+                val sub = listOfNotNull(
+                    meta?.releaseInfo,
+                    meta?.runtime,
+                    meta?.imdbRating?.let { "★ $it" },
+                    meta?.genres?.take(3)?.joinToString(" · ")?.ifBlank { null }
+                ).joinToString("   ·   ")
+                if (sub.isNotBlank()) {
+                    Text(
+                        sub,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 10.dp)
+                    )
+                }
+                meta?.description?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 10.dp)
+                    )
+                }
+            }
+        }
+    }
+}
 
 @Composable
 fun TopBar(nav: NavHostController, current: String) {
@@ -388,7 +543,13 @@ private val GENRE_ROWS = listOf(
 )
 
 @Composable
-private fun GenreRow(title: String, type: String, genre: String, nav: NavHostController) {
+private fun GenreRow(
+    title: String,
+    type: String,
+    genre: String,
+    nav: NavHostController,
+    onItemFocused: ((CardItem) -> Unit)? = null
+) {
     val repo = ServiceLocator.mediaRepo
     // null = still loading. We must NOT render a zero-height row while loading:
     // LazyColumn would recycle it (cancelling the fetch) before it ever gains
@@ -407,11 +568,14 @@ private fun GenreRow(title: String, type: String, genre: String, nav: NavHostCon
                     title = title,
                     modifier = Modifier.padding(start = 24.dp, bottom = 6.dp)
                 )
-                Spacer(Modifier.fillMaxWidth().height(226.dp))
+                Spacer(Modifier.fillMaxWidth().height(200.dp))
             }
         }
         else -> if (loaded.isNotEmpty()) {
-            MediaRow(title, loaded) { nav.navigate(Routes.detail(it.type, it.id)) }
+            MediaRow(title, loaded, onItemFocused = onItemFocused,
+                cardWidth = HOME_CARD_W, posterHeight = HOME_CARD_H) {
+                nav.navigate(Routes.detail(it.type, it.id))
+            }
         }
     }
 }

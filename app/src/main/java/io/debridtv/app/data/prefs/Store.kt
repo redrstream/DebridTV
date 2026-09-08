@@ -14,11 +14,14 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "debridtv")
 
 private val KEY_APIKEY = stringPreferencesKey("alldebrid_api_key")
 private val KEY_HISTORY = stringPreferencesKey("watch_history_json")
+private val KEY_CW_DISMISSED = stringPreferencesKey("cw_dismissed_json")
 private val KEY_SURROUND = booleanPreferencesKey("prefer_surround")
 private val KEY_SIMKL_TOKEN = stringPreferencesKey("simkl_access_token")
 private val KEY_SIMKL_ENABLED = booleanPreferencesKey("simkl_enabled")
@@ -129,6 +132,7 @@ data class HistoryEntry(
 class HistoryStore(private val context: Context) {
 
     private val serializer = ListSerializer(HistoryEntry.serializer())
+    private val dismissedSerializer = MapSerializer(String.serializer(), Long.serializer())
 
     val history: Flow<List<HistoryEntry>> = context.dataStore.data.map { prefs ->
         decode(prefs[KEY_HISTORY]).sortedByDescending { it.updatedAt }
@@ -144,6 +148,10 @@ class HistoryStore(private val context: Context) {
             // keep the list bounded
             val trimmed = list.take(200)
             prefs[KEY_HISTORY] = Net.json.encodeToString(serializer, trimmed)
+            // This title is active again (played locally, or a genuinely newer remote
+            // spot merged in), so lift any Continue-Watching dismissal for it and its
+            // show, otherwise the tombstone would keep hiding a show you're watching.
+            clearDismissedInPrefs(prefs, entry.key)
         }
     }
 
@@ -151,6 +159,7 @@ class HistoryStore(private val context: Context) {
         context.dataStore.edit { prefs ->
             val list = decode(prefs[KEY_HISTORY]).filterNot { it.key == key }
             prefs[KEY_HISTORY] = Net.json.encodeToString(serializer, list)
+            markDismissedInPrefs(prefs, key)
         }
     }
 
@@ -164,8 +173,47 @@ class HistoryStore(private val context: Context) {
             val list = decode(prefs[KEY_HISTORY])
                 .filterNot { it.key == showId || it.key.startsWith("$showId:") }
             prefs[KEY_HISTORY] = Net.json.encodeToString(serializer, list)
+            markDismissedInPrefs(prefs, showId)
         }
     }
+
+    // ---- Continue-Watching dismissals (tombstones) -------------------------
+    //
+    // Removing a card only deletes the LOCAL history entry. The title still exists
+    // on SimKL, so the next cross-device pull would re-add it and the card would
+    // "come back" moments later. We record a per-title dismissal timestamp so the
+    // pull can skip a title the user removed here — unless a strictly-newer remote
+    // watch/resume arrives (you watched it again elsewhere), which lifts the
+    // tombstone via [upsert]. Keyed by the bare id (movie "tt123" or show "tt123"),
+    // so a series dismissal also suppresses its episode rows ("tt123:s:e").
+
+    /** The instant this title/show was dismissed from Continue Watching, or null if
+     *  it hasn't been. [showKey] is the bare movie/show id (no season:episode). */
+    suspend fun dismissedAt(showKey: String): Long? =
+        decodeDismissed(current2()).let { it[showKey] }
+
+    private fun markDismissedInPrefs(prefs: androidx.datastore.preferences.core.MutablePreferences, key: String) {
+        // Store under the bare show/movie id so it covers every episode row too.
+        val bare = key.substringBefore(":")
+        val map = decodeDismissed(prefs[KEY_CW_DISMISSED]).toMutableMap()
+        map[bare] = System.currentTimeMillis()
+        // Bound the map so it can't grow forever; keep the most recent dismissals.
+        val trimmed = map.entries.sortedByDescending { it.value }.take(300).associate { it.key to it.value }
+        prefs[KEY_CW_DISMISSED] = Net.json.encodeToString(dismissedSerializer, trimmed)
+    }
+
+    private fun clearDismissedInPrefs(prefs: androidx.datastore.preferences.core.MutablePreferences, key: String) {
+        val bare = key.substringBefore(":")
+        val map = decodeDismissed(prefs[KEY_CW_DISMISSED])
+        if (!map.containsKey(bare)) return
+        prefs[KEY_CW_DISMISSED] = Net.json.encodeToString(dismissedSerializer, map - bare)
+    }
+
+    private suspend fun current2(): String? = context.dataStore.data.first()[KEY_CW_DISMISSED]
+
+    private fun decodeDismissed(raw: String?): Map<String, Long> =
+        if (raw.isNullOrBlank()) emptyMap()
+        else runCatching { Net.json.decodeFromString(dismissedSerializer, raw) }.getOrDefault(emptyMap())
 
     /**
      * Manually mark an episode/movie watched or unwatched. Marking watched keeps
