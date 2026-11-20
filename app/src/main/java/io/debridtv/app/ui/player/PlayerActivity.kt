@@ -112,6 +112,13 @@ class PlayerActivity : ComponentActivity() {
     // SimKL: scrobble "start" once per loaded episode/movie (reset when we
     // advance to the next episode). Push is best-effort and never blocks playback.
     private var scrobbledStart = false
+    // True once this item's "finished" STOP has gone to SimKL, so it's sent exactly
+    // once per episode (from whichever path hits first: 90% mark, Up-next offer, true
+    // end, or leaving) and no later PAUSE can turn it back into "in progress".
+    private var scrobbledStop = false
+    // Position of the last PAUSE we sent, so leaving the player right after pausing
+    // doesn't send the same spot twice.
+    private var lastPauseSentMs = -1L
 
     // Sticky "this title is finished" flag for the currently-loaded item. Set the
     // moment we reach the end / offer the next episode, so completion is recorded
@@ -289,8 +296,22 @@ class PlayerActivity : ComponentActivity() {
                 }
                 if (state == Player.STATE_ENDED) {
                     markCurrentWatched()
-                    scrobbleStop()
                     offerNextEpisode()
+                }
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (reason != Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) return
+                if (!playWhenReady) {
+                    // User hit pause: record the spot right away, locally AND on SimKL.
+                    // People often pause and then just turn the TV off, so waiting for
+                    // the player to close (or the 10s tick) can lose the position.
+                    saveProgress()
+                    scrobblePause()
+                    // Resuming is a new viewing session on SimKL's side.
+                    scrobbledStart = false
+                } else if (player?.playbackState == Player.STATE_READY) {
+                    scrobbleStart()
                 }
             }
 
@@ -500,6 +521,14 @@ class PlayerActivity : ComponentActivity() {
     private fun playNextEpisode() {
         handler.removeCallbacks(autoAdvance)
         if (nextSeasons.isEmpty()) return
+        // Close out the episode we're leaving BEFORE swapping, while its position is
+        // still readable: save it and tell SimKL it's finished (or where it stopped).
+        // Auto-advance switches in the last minute, so the old episode never reaches
+        // STATE_ENDED — without this a binge only ever reported its last episode, and
+        // the other TVs never saw the earlier ones as watched.
+        maybeMarkWatched()
+        saveProgress()
+        scrobbleExit()
         val season = nextSeasons.removeAt(0)
         val episode = nextEpisodes.removeAt(0)
         val label = if (nextLabels.isNotEmpty()) nextLabels.removeAt(0) else "S${season}E${episode}"
@@ -552,6 +581,8 @@ class PlayerActivity : ComponentActivity() {
                 // New episode: let it scrobble its own "start" to SimKL, and start
                 // fresh on the finished flag (this one hasn't been watched yet).
                 scrobbledStart = false
+                scrobbledStop = false
+                lastPauseSentMs = -1L
                 currentWatched = false
                 statusText.visibility = View.GONE
                 p.setMediaSource(buildMediaSource())
@@ -647,16 +678,26 @@ class PlayerActivity : ComponentActivity() {
     private fun markCurrentWatched() {
         currentWatched = true
         saveProgress()
+        // Tell SimKL now (once), rather than only when the player closes — so a TV in
+        // another room sees it as watched even mid-binge. Guarded inside scrobbleStop.
+        scrobbleStop()
     }
 
     /**
-     * Count the item as watched once you're most of the way through (WATCHED_THRESHOLD_PCT),
-     * not only at the true end — people routinely stop before the credits. Checked on the 10s
-     * tick, so crossing the line marks it even if you back out right after.
+     * Count the item as watched once you're into the credits, not only at the true end —
+     * people routinely stop before them. Watched when EITHER there are WATCHED_REMAINING_MS
+     * (5 min) or less left, OR you're past WATCHED_THRESHOLD_PCT. The 5-minute rule only
+     * applies to items longer than MIN_DURATION_FOR_REMAINING_RULE_MS, so a short clip isn't
+     * marked done at the halfway point. Checked on the 10s tick, so crossing the line marks
+     * it even if you back out right after.
      */
     private fun maybeMarkWatched() {
         if (currentWatched) return
-        if (currentProgressPct() >= WATCHED_THRESHOLD_PCT) markCurrentWatched()
+        val p = player ?: return
+        val dur = p.duration
+        val nearEnd = dur >= MIN_DURATION_FOR_REMAINING_RULE_MS &&
+            dur - p.currentPosition <= WATCHED_REMAINING_MS
+        if (nearEnd || currentProgressPct() >= WATCHED_THRESHOLD_PCT) markCurrentWatched()
     }
 
     // ---- SimKL scrobble (cross-device sync) --------------------------------
@@ -685,20 +726,30 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun scrobbleStart() {
-        if (scrobbledStart) return
+        if (scrobbledStart || scrobbledStop) return
         val entry = currentEntry() ?: return
         scrobbledStart = true
+        lastPauseSentMs = -1L
         ServiceLocator.simkl.fireStart(entry, currentProgressPct())
     }
 
     private fun scrobblePause() {
+        // Already reported as watched — a pause must not drag it back to "in progress".
+        if (scrobbledStop) return
         val entry = currentEntry() ?: return
+        // Same spot as the pause we just sent (e.g. paused, then backed out) — skip.
+        if (lastPauseSentMs >= 0 && kotlin.math.abs(entry.positionMs - lastPauseSentMs) < 2_000) return
+        lastPauseSentMs = entry.positionMs
         ServiceLocator.simkl.firePause(entry, currentProgressPct())
     }
 
     private fun scrobbleStop() {
+        if (scrobbledStop) return
         val entry = currentEntry() ?: return
-        ServiceLocator.simkl.fireStop(entry, currentProgressPct())
+        scrobbledStop = true
+        // SimKL counts a STOP as watched only at >=80%; we only reach here past our own
+        // 90% / last-minute / end thresholds, but floor it to be safe.
+        ServiceLocator.simkl.fireStop(entry, maxOf(currentProgressPct(), 95.0))
     }
 
     /** On leaving the player: STOP once watched (SimKL records it as watched and drops
@@ -725,6 +776,11 @@ class PlayerActivity : ComponentActivity() {
         // which SimKL treats as watched at >=80%). Matches how streaming apps stop short
         // of the credits; raise toward 100 to require finishing, lower to mark sooner.
         private const val WATCHED_THRESHOLD_PCT = 90.0
+        // ...or with this much (or less) left — credits. Matches HistoryEntry.isFinished.
+        private const val WATCHED_REMAINING_MS = 5 * 60 * 1000L
+        // The 5-minute rule only kicks in for items at least this long (so a 10-min
+        // short isn't "watched" at its halfway point).
+        private const val MIN_DURATION_FOR_REMAINING_RULE_MS = 15 * 60 * 1000L
 
         private const val EXTRA_URL = "url"
         private const val EXTRA_TITLE = "title"

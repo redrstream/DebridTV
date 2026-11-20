@@ -561,6 +561,7 @@ fun DetailScreen(
                                 val label = "${meta?.name ?: ""} · ${cv.displayLabel}"
                                 scope.launch {
                                     ServiceLocator.history.setWatched(k, "series", label, meta?.poster, !watched)
+                                    ServiceLocator.simkl.fireSetWatched(k, !watched)
                                 }
                             }
                         )
@@ -597,6 +598,7 @@ fun DetailScreen(
                         val label = "${meta?.name ?: ""} · ${ep.displayLabel}"
                         scope.launch {
                             ServiceLocator.history.setWatched(k, "series", label, meta?.poster, !currentlyWatched)
+                            ServiceLocator.simkl.fireSetWatched(k, !currentlyWatched)
                         }
                         markTarget = null
                     }) { Text(if (currentlyWatched) "Mark unwatched" else "Mark watched") }

@@ -15,6 +15,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import io.debridtv.app.di.ServiceLocator
 import io.debridtv.app.ui.screens.DetailScreen
 import io.debridtv.app.ui.screens.HomeScreen
 import io.debridtv.app.ui.screens.LibraryScreen
@@ -42,6 +43,22 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Catch up with the other TVs every time the app comes to the foreground —
+        // waking the TV, coming back from the player, switching back from another app —
+        // on WHATEVER screen it resumes on. (Previously only Home pulled, so a TV left on
+        // a show's page never learned about episodes watched in another room.) The
+        // detail page and Continue Watching read history reactively, so they update in
+        // place as the pull lands. SimklClient dedupes and retries if the network isn't
+        // up yet after standby.
+        ServiceLocator.simkl.syncNow(RESUME_SYNC_MIN_INTERVAL_MS)
+    }
+
+    private companion object {
+        const val RESUME_SYNC_MIN_INTERVAL_MS = 20_000L
     }
 }
 

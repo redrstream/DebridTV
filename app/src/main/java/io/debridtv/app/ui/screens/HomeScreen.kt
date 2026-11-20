@@ -123,8 +123,8 @@ fun HomeScreen(nav: NavHostController) {
     fun syncSimkl() {
         // Resume points (in-progress) + watched/finished state, so all three look the
         // same on every TV. Both are throttled and best-effort inside SimklClient.
-        ServiceLocator.simkl.firePull(FOREGROUND_PULL_MIN_INTERVAL_MS)
-        ServiceLocator.simkl.firePullWatched(FOREGROUND_PULL_MIN_INTERVAL_MS)
+        // (MainActivity also syncs on every app resume, whatever screen is showing.)
+        ServiceLocator.simkl.syncNow(FOREGROUND_PULL_MIN_INTERVAL_MS)
     }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {

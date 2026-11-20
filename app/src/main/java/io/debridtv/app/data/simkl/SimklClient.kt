@@ -7,7 +7,9 @@ import io.debridtv.app.data.prefs.SettingsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -130,6 +132,77 @@ class SimklClient(
         }
     }
 
+    // ---- Explicit watched marks (push) -------------------------------------
+
+    /** Push a manual "Mark watched" / "Mark unwatched" from the TV to SimKL so the
+     *  other TVs see it too. Scrobbles only cover things actually played, so a manual
+     *  mark needs the history endpoint. Best-effort like everything else here. */
+    fun fireSetWatched(key: String, watched: Boolean) {
+        scope.launch {
+            if (!isConfigured() || !settings.simklEnabledOrDefault()) return@launch
+            val body = historyBody(key) ?: return@launch
+            val token = validToken() ?: return@launch
+            try {
+                if (watched) api.addToHistory(bearer(token), body)
+                else api.removeFromHistory(bearer(token), body)
+            } catch (_: Exception) {
+                // best-effort
+            }
+        }
+    }
+
+    private fun historyBody(key: String): SimklHistoryReq? {
+        if (!key.startsWith("tt")) return null
+        val parts = key.split(":")
+        return if (parts.size >= 3) {
+            val season = parts[1].toIntOrNull() ?: return null
+            val number = parts[2].toIntOrNull() ?: return null
+            SimklHistoryReq(
+                shows = listOf(
+                    SimklHistoryShow(
+                        ids = SimklIds(imdb = parts[0]),
+                        seasons = listOf(SimklHistorySeason(season, listOf(SimklHistoryEpisode(number))))
+                    )
+                )
+            )
+        } else {
+            SimklHistoryReq(movies = listOf(SimklHistoryMovie(ids = SimklIds(imdb = parts[0]))))
+        }
+    }
+
+    // ---- Combined sync (pull) ----------------------------------------------
+
+    private val syncMutex = Mutex()
+
+    /**
+     * Bring this TV up to date with the other TVs: watched/finished state AND resume
+     * points. Called whenever the app comes to the foreground (any screen, not just
+     * Home) plus Home's slow backstop.
+     *
+     * A TV waking from standby often has no network for the first few seconds, so a
+     * failed pull is retried a couple of times instead of being counted as done (the
+     * throttle stamp is only written on success). If a sync is already running this
+     * call is a no-op.
+     */
+    fun syncNow(minIntervalMs: Long = DEFAULT_THROTTLE_MS) {
+        scope.launch {
+            if (!syncMutex.tryLock()) return@launch
+            try {
+                for (wait in RETRY_DELAYS_MS) {
+                    if (wait > 0) delay(wait)
+                    // Watched state first, then resume points. Each skips itself if it
+                    // ran within minIntervalMs, and returns false only on a failure
+                    // worth retrying.
+                    val watchedOk = pullWatched(minIntervalMs)
+                    val playbackOk = pullPlayback(minIntervalMs)
+                    if (watchedOk && playbackOk) break
+                }
+            } finally {
+                syncMutex.unlock()
+            }
+        }
+    }
+
     // ---- Sync playback (pull) ----------------------------------------------
 
     /**
@@ -146,23 +219,26 @@ class SimklClient(
 
     /** Merge SimKL's resume points into local history — but only entries newer
      *  than what this device already has, so a spot you just set locally isn't
-     *  clobbered by a stale remote one. */
-    suspend fun pullPlayback(minIntervalMs: Long = DEFAULT_THROTTLE_MS) {
-        if (!isConfigured() || !settings.simklEnabledOrDefault()) return
-        val token = validToken() ?: return
+     *  clobbered by a stale remote one. Returns false only when the fetch failed
+     *  (worth retrying); true when it ran or was skipped by the throttle. */
+    suspend fun pullPlayback(minIntervalMs: Long = DEFAULT_THROTTLE_MS): Boolean {
+        if (!isConfigured() || !settings.simklEnabledOrDefault()) return true
+        val token = validToken() ?: return true
         // Throttle purely on wall-clock so rapid re-triggers (bouncing in/out of Home)
         // don't spam the API, while a genuine periodic/foreground refresh gets through.
         val now = System.currentTimeMillis()
-        if (now - settings.simklLastPullAt() < minIntervalMs) return
-        settings.setSimklLastPullAt(now)
+        if (now - settings.simklLastPullAt() < minIntervalMs) return true
         // The read endpoint is per-type (movies / episodes) and returns a flat array.
         val items = try {
             withContext(Dispatchers.IO) {
                 api.playback(bearer(token), "movies") + api.playback(bearer(token), "episodes")
             }
         } catch (_: Exception) {
-            return
+            // Don't stamp the throttle: a TV just waking up may not have network yet,
+            // and the retry in syncNow needs to get through.
+            return false
         }
+        settings.setSimklLastPullAt(now)
         for (item in items) {
             if (item.progress <= 0.0) continue
             val pausedAt = parseIso(item.paused_at) ?: continue
@@ -199,6 +275,7 @@ class SimklClient(
                 )
             )
         }
+        return true
     }
 
     // ---- Sync watched state (pull) -----------------------------------------
@@ -219,12 +296,12 @@ class SimklClient(
      * dragging your whole back-catalogue into Continue Watching on the first sync, the
      * first pull only looks back [FIRST_SYNC_WINDOW_MS]; after that it's incremental.
      */
-    suspend fun pullWatched(minIntervalMs: Long = DEFAULT_THROTTLE_MS) {
-        if (!isConfigured() || !settings.simklEnabledOrDefault()) return
-        val token = validToken() ?: return
+    suspend fun pullWatched(minIntervalMs: Long = DEFAULT_THROTTLE_MS): Boolean {
+        if (!isConfigured() || !settings.simklEnabledOrDefault()) return true
+        val token = validToken() ?: return true
         val now = System.currentTimeMillis()
         val last = settings.simklLastWatchedSyncAt()
-        if (last != 0L && now - last < minIntervalMs) return
+        if (last != 0L && now - last < minIntervalMs) return true
         // First run: a short recent window (keeps Continue Watching from filling with old
         // finished shows). After that: incremental from the last sync, with a day of
         // overlap so a boundary/clock-skew item is re-fetched (marking is idempotent).
@@ -232,7 +309,7 @@ class SimklClient(
         val resp = try {
             withContext(Dispatchers.IO) { api.allItems(bearer(token), dateFrom = formatIso(since)) }
         } catch (_: Exception) {
-            return
+            return false
         }
         settings.setSimklLastWatchedSyncAt(now)
 
@@ -264,6 +341,7 @@ class SimklClient(
                 watchedAt = parseIso(furthest.third) ?: parseIso(si.last_watched_at)
             )
         }
+        return true
     }
 
     /** Mark a local history entry watched from a remote sync, without clobbering a fresher
@@ -366,6 +444,10 @@ class SimklClient(
         const val FIRST_SYNC_WINDOW_MS = 3L * 24 * 60 * 60 * 1000L // 3 days
         // Re-fetch overlap on incremental syncs to catch boundary/clock-skew items.
         const val OVERLAP_MS = 24 * 60 * 60 * 1000L // 1 day
+
+        // syncNow: try right away, then retry after 5s and 15s if the network wasn't
+        // up yet (typical right after a TV wakes from standby).
+        val RETRY_DELAYS_MS = longArrayOf(0L, 5_000L, 15_000L)
 
         val ISO_PATTERNS = listOf(
             "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",

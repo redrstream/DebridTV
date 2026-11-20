@@ -71,7 +71,44 @@ interface SimklApi {
         @Query("episode_watched_at") episodeWatchedAt: String = "yes",
         @Query("date_from") dateFrom: String? = null
     ): SimklAllItems
+
+    // ---- Sync history (explicit watched / unwatched marks) -----------------
+
+    /** Explicitly add movies / episodes to watched history (used for a manual
+     *  "Mark watched" on the TV, which has no scrobble session behind it). */
+    @POST("sync/history")
+    suspend fun addToHistory(
+        @Header("Authorization") auth: String,
+        @Body body: SimklHistoryReq
+    ): Response<Unit>
+
+    /** Remove movies / episodes from watched history ("Mark unwatched"). */
+    @POST("sync/history/remove")
+    suspend fun removeFromHistory(
+        @Header("Authorization") auth: String,
+        @Body body: SimklHistoryReq
+    ): Response<Unit>
 }
+
+// ---- History DTOs ------------------------------------------------------------
+
+@Serializable
+data class SimklHistoryReq(
+    val movies: List<SimklHistoryMovie>? = null,
+    val shows: List<SimklHistoryShow>? = null
+)
+
+@Serializable
+data class SimklHistoryMovie(val ids: SimklIds, val watched_at: String? = null)
+
+@Serializable
+data class SimklHistoryShow(val ids: SimklIds, val seasons: List<SimklHistorySeason>)
+
+@Serializable
+data class SimklHistorySeason(val number: Int, val episodes: List<SimklHistoryEpisode>)
+
+@Serializable
+data class SimklHistoryEpisode(val number: Int, val watched_at: String? = null)
 
 // ---- Shared media DTOs -----------------------------------------------------
 
