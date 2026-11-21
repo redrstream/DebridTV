@@ -27,6 +27,27 @@ private val KEY_SIMKL_TOKEN = stringPreferencesKey("simkl_access_token")
 private val KEY_SIMKL_ENABLED = booleanPreferencesKey("simkl_enabled")
 private val KEY_SIMKL_LAST_PULL = longPreferencesKey("simkl_last_pull_at")
 private val KEY_SIMKL_LAST_WATCHED = longPreferencesKey("simkl_last_watched_sync_at")
+private val KEY_SIMKL_STATUS = stringPreferencesKey("simkl_status_json")
+private val KEY_SIMKL_ACTIVITIES = stringPreferencesKey("simkl_activities_snapshot_json")
+
+/** What the last SimKL sync / push did, shown in Settings so problems are visible
+ *  instead of silently swallowed. [needsReconnect] drives the "reconnect SimKL"
+ *  warning on Home (set on a 401, cleared by any successful call or a new login). */
+@Serializable
+data class SimklStatus(
+    val lastSyncAt: Long = 0,
+    val lastSyncOk: Boolean = true,
+    val lastSyncMsg: String? = null,
+    val lastPushAt: Long = 0,
+    val lastPushOk: Boolean = true,
+    val lastPushMsg: String? = null,
+    val needsReconnect: Boolean = false
+)
+
+/** Saved /sync/activities timestamps. [all] is passed back verbatim as date_from;
+ *  [watchKey] / [playKey] tell us which buckets moved so we only fetch those. */
+@Serializable
+data class SimklSnapshot(val all: String, val watchKey: String, val playKey: String)
 
 /** Stores the AllDebrid API key + playback preferences locally on the device. */
 class SettingsStore(private val context: Context) {
@@ -69,8 +90,42 @@ class SettingsStore(private val context: Context) {
         context.dataStore.data.first()[KEY_SIMKL_TOKEN]?.takeIf { it.isNotBlank() }
 
     suspend fun setSimklToken(token: String) {
-        context.dataStore.edit { it[KEY_SIMKL_TOKEN] = token }
+        context.dataStore.edit {
+            it[KEY_SIMKL_TOKEN] = token
+            // Fresh login: forget the old sync snapshot (pull again from scratch) and
+            // clear any "reconnect" warning.
+            it.remove(KEY_SIMKL_ACTIVITIES)
+            it.remove(KEY_SIMKL_LAST_PULL)
+            val st = decodeStatus(it[KEY_SIMKL_STATUS])
+            it[KEY_SIMKL_STATUS] = Net.json.encodeToString(SimklStatus.serializer(), st.copy(needsReconnect = false))
+        }
     }
+
+    val simklStatus: Flow<SimklStatus> =
+        context.dataStore.data.map { decodeStatus(it[KEY_SIMKL_STATUS]) }
+
+    /** Atomically update the stored sync status. */
+    suspend fun updateSimklStatus(change: (SimklStatus) -> SimklStatus) {
+        context.dataStore.edit {
+            val next = change(decodeStatus(it[KEY_SIMKL_STATUS]))
+            it[KEY_SIMKL_STATUS] = Net.json.encodeToString(SimklStatus.serializer(), next)
+        }
+    }
+
+    suspend fun simklSnapshot(): SimklSnapshot? =
+        context.dataStore.data.first()[KEY_SIMKL_ACTIVITIES]?.let { raw ->
+            runCatching { Net.json.decodeFromString(SimklSnapshot.serializer(), raw) }.getOrNull()
+        }
+
+    suspend fun setSimklSnapshot(value: SimklSnapshot) {
+        context.dataStore.edit {
+            it[KEY_SIMKL_ACTIVITIES] = Net.json.encodeToString(SimklSnapshot.serializer(), value)
+        }
+    }
+
+    private fun decodeStatus(raw: String?): SimklStatus =
+        if (raw.isNullOrBlank()) SimklStatus()
+        else runCatching { Net.json.decodeFromString(SimklStatus.serializer(), raw) }.getOrDefault(SimklStatus())
 
     suspend fun setSimklEnabled(value: Boolean) {
         context.dataStore.edit { it[KEY_SIMKL_ENABLED] = value }
@@ -97,6 +152,8 @@ class SettingsStore(private val context: Context) {
             it.remove(KEY_SIMKL_TOKEN)
             it.remove(KEY_SIMKL_LAST_PULL)
             it.remove(KEY_SIMKL_LAST_WATCHED)
+            it.remove(KEY_SIMKL_ACTIVITIES)
+            it.remove(KEY_SIMKL_STATUS)
         }
     }
 }

@@ -47,29 +47,36 @@ interface SimklApi {
 
     // ---- Sync playback (resume points) -------------------------------------
 
-    /** Paused playbacks (progress < 80%) for cross-device resume. The endpoint is
-     *  per-type — `movies` or `episodes` — and returns a flat array of sessions each
-     *  carrying a `progress` percent (no runtime). */
-    @GET("sync/playback/{type}")
-    suspend fun playback(
-        @Header("Authorization") auth: String,
-        @Path("type") type: String
-    ): List<SimklPlaybackItem>
+    /** All paused playbacks (movies + episodes, progress < 80%) for cross-device
+     *  resume — a flat array of sessions each carrying a `progress` percent (no
+     *  runtime). */
+    @GET("sync/playback")
+    suspend fun playbackAll(@Header("Authorization") auth: String): List<SimklPlaybackItem>
+
+    // ---- Sync activities (what changed?) -----------------------------------
+
+    /** Cheap "last modified" timestamps per list. SimKL requires calling this FIRST
+     *  and only pulling the lists that moved — polling all-items directly gets the
+     *  client_id suspended. */
+    @GET("sync/activities")
+    suspend fun activities(@Header("Authorization") auth: String): SimklActivities
 
     // ---- Sync all-items (watched / finished state) -------------------------
 
     /**
-     * The user's whole library grouped by media type, with per-episode watched
-     * timestamps (episode_watched_at=yes). Used to bring finished/watched state across
-     * from other devices — the resume list ([playback]) drops items once they pass
-     * ~80%, so this is how a "finished elsewhere" title becomes watched here too.
-     * `date_from` (ISO-8601) makes it incremental after the first full sync.
+     * The user's library grouped by media type. `extended=full` is REQUIRED for the
+     * per-season episode lists (without it shows come back with no episodes at all —
+     * the v0.1.25–0.1.32 bug that meant watched episodes never crossed TVs), and
+     * `episode_watched_at=yes` adds each episode's watched time. `date_from` = the
+     * saved activities `all` value returns only items changed after it.
      */
     @GET("sync/all-items")
     suspend fun allItems(
         @Header("Authorization") auth: String,
+        @Query("date_from") dateFrom: String,
+        @Query("extended") extended: String = "full",
         @Query("episode_watched_at") episodeWatchedAt: String = "yes",
-        @Query("date_from") dateFrom: String? = null
+        @Query("include_all_episodes") includeAllEpisodes: String = "original"
     ): SimklAllItems
 
     // ---- Sync history (explicit watched / unwatched marks) -----------------
@@ -187,7 +194,30 @@ data class SimklPlaybackItem(
     val type: String? = null,
     val movie: SimklMovie? = null,
     val show: SimklShow? = null,
+    val anime: SimklShow? = null,
     val episode: SimklEpisode? = null
+)
+
+// ---- Activities DTOs ---------------------------------------------------------
+
+@Serializable
+data class SimklActivities(
+    val all: String? = null,
+    val tv_shows: SimklDomainActivity? = null,
+    val anime: SimklDomainActivity? = null,
+    val movies: SimklDomainActivity? = null
+)
+
+@Serializable
+data class SimklDomainActivity(
+    val all: String? = null,
+    val playback: String? = null,
+    val plantowatch: String? = null,
+    val watching: String? = null,
+    val completed: String? = null,
+    val hold: String? = null,
+    val dropped: String? = null,
+    val removed_from_list: String? = null
 )
 
 // ---- All-items (watched state) DTOs ----------------------------------------
@@ -213,6 +243,7 @@ data class SimklShowItem(
     val last_watched_at: String? = null,
     val status: String? = null,
     val show: SimklShow? = null,
+    val anime: SimklShow? = null,
     val seasons: List<SimklSeasonWatched> = emptyList()
 )
 

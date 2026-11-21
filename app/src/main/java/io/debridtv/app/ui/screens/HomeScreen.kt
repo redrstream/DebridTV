@@ -55,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import io.debridtv.app.data.cinemeta.Meta
+import io.debridtv.app.data.prefs.SimklStatus
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -94,6 +95,8 @@ fun HomeScreen(nav: NavHostController) {
     val apiKey by ServiceLocator.settings.apiKey.collectAsState(initial = null)
     val preferSurround by ServiceLocator.settings.preferSurround.collectAsState(initial = true)
     val history by ServiceLocator.history.history.collectAsState(initial = emptyList())
+    val simklStatus by ServiceLocator.settings.simklStatus.collectAsState(initial = SimklStatus())
+    val simklConnected by ServiceLocator.settings.simklConnected.collectAsState(initial = false)
     var removeTarget by remember { mutableStateOf<CardItem?>(null) }
     var busy by remember { mutableStateOf(false) }
 
@@ -271,6 +274,17 @@ fun HomeScreen(nav: NavHostController) {
                 if (apiKey.isNullOrBlank()) {
                     Text(
                         "No AllDebrid API key yet — open Settings to add it before playing.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                    )
+                }
+                // SimKL rejected the saved sign-in (401) — watch history has stopped
+                // syncing until the account is reconnected. Overlays like the notice above.
+                if (simklStatus.needsReconnect && simklConnected) {
+                    Text(
+                        "SimKL needs you to sign in again — watch history isn't syncing. " +
+                            "Open Settings → SimKL sync → Disconnect, then Connect SimKL.",
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)

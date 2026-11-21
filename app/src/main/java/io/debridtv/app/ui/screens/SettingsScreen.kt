@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -30,6 +31,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import io.debridtv.app.BuildConfig
+import io.debridtv.app.data.prefs.SimklStatus
 import io.debridtv.app.data.simkl.SimklClient
 import io.debridtv.app.di.ServiceLocator
 import io.debridtv.app.ui.Routes
@@ -74,6 +76,10 @@ fun SettingsScreen(nav: NavHostController) {
     val simklConnected by ServiceLocator.settings.simklConnected.collectAsState(initial = false)
     val simklEnabled by ServiceLocator.settings.simklEnabled.collectAsState(initial = true)
     var simklUi by remember { mutableStateOf<SimklUi>(SimklUi.Idle) }
+    val simklStatus by ServiceLocator.settings.simklStatus.collectAsState(initial = SimklStatus())
+    // Re-render the "x min ago" labels every 30s while Settings is open.
+    var nowTick by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { while (true) { delay(30_000); nowTick = System.currentTimeMillis() } }
 
     fun connectSimkl() {
         scope.launch {
@@ -312,7 +318,23 @@ fun SettingsScreen(nav: NavHostController) {
                                 modifier = Modifier.padding(horizontal = 12.dp)
                             )
                         }
+                        // What actually happened on the last sync / push, so a problem
+                        // (expired sign-in, rejected key, no connection) is visible.
+                        if (simklStatus.needsReconnect) {
+                            Text(
+                                "SimKL rejected this TV's sign-in. Disconnect, then Connect SimKL again.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(top = 8.dp)
+                            )
+                        }
+                        SimklStatusLine("Last sync", simklStatus.lastSyncAt, simklStatus.lastSyncOk, simklStatus.lastSyncMsg, nowTick)
+                        SimklStatusLine("Last update sent", simklStatus.lastPushAt, simklStatus.lastPushOk, simklStatus.lastPushMsg, nowTick)
                         Row(Modifier.padding(top = 12.dp)) {
+                            TvButton(onClick = {
+                                ServiceLocator.simkl.syncNow(minIntervalMs = 0L, force = true)
+                            }) { Text("Sync now") }
+                            Spacer(Modifier.width(12.dp))
                             TvOutlinedButton(onClick = {
                                 scope.launch {
                                     ServiceLocator.simkl.disconnect()
@@ -375,5 +397,28 @@ fun SettingsScreen(nav: NavHostController) {
                 }
             }
         }
+    }
+}
+
+/** One "Last sync: 2 min ago — Synced …" line in the SimKL section; red on failure. */
+@Composable
+private fun SimklStatusLine(label: String, at: Long, ok: Boolean, msg: String?, now: Long) {
+    val text = if (at <= 0L) "$label: not yet"
+    else "$label: ${agoText(now - at)} — ${msg ?: if (ok) "OK" else "failed"}"
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = if (ok || at <= 0L) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+        modifier = Modifier.padding(top = 6.dp)
+    )
+}
+
+private fun agoText(ms: Long): String {
+    val min = (ms.coerceAtLeast(0L) / 60_000L)
+    return when {
+        min < 1 -> "just now"
+        min < 60 -> "$min min ago"
+        min < 24 * 60 -> "${min / 60} h ago"
+        else -> "${min / (24 * 60)} d ago"
     }
 }
