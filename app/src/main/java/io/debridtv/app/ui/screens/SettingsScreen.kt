@@ -28,6 +28,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.ImeAction
+import io.debridtv.app.ui.theme.Accent
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import io.debridtv.app.BuildConfig
@@ -70,6 +91,15 @@ fun SettingsScreen(nav: NavHostController) {
     var message by remember { mutableStateOf<String?>(null) }
     var checking by remember { mutableStateOf(false) }
     var update by remember { mutableStateOf<UpdateUi>(UpdateUi.Idle) }
+
+    // API key field edit mode (see the field below).
+    var keyEditing by remember { mutableStateOf(false) }
+    var keyWrapperFocused by remember { mutableStateOf(false) }
+    var keyTextHadFocus by remember { mutableStateOf(false) }
+    val keyWrapperFocus = remember { FocusRequester() }
+    val keyTextFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
 
     // SimKL cross-device sync.
     val simklConfigured = remember { ServiceLocator.simkl.isConfigured() }
@@ -128,13 +158,72 @@ fun SettingsScreen(nav: NavHostController) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
             )
-            OutlinedTextField(
-                value = field,
-                onValueChange = { field = it; message = null },
-                singleLine = true,
-                label = { Text("API key") },
-                modifier = Modifier.fillMaxWidth()
-            )
+            // TV-friendly text field: D-pad focus lands on a wrapper that only HIGHLIGHTS
+            // the field. Pressing OK (center) switches to editing, focuses the real text
+            // field and opens the keyboard. Scrolling past no longer pops the keyboard.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .focusRequester(keyWrapperFocus)
+                    .onFocusChanged { keyWrapperFocused = it.isFocused }
+                    .border(
+                        width = 2.dp,
+                        color = if (keyWrapperFocused) Accent else Color.Transparent,
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    .clickable(enabled = !keyEditing) { keyEditing = true }
+            ) {
+                OutlinedTextField(
+                    value = field,
+                    onValueChange = { field = it; message = null },
+                    singleLine = true,
+                    readOnly = !keyEditing,
+                    label = { Text(if (keyEditing) "API key" else "API key — press OK to edit") },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = {
+                        keyEditing = false
+                        keyboard?.hide()
+                        runCatching { keyWrapperFocus.requestFocus() }
+                    }),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(keyTextFocus)
+                        .focusProperties { canFocus = keyEditing }
+                        // A text field swallows D-pad Up/Down, trapping focus. While
+                        // editing, Up/Down leave the field (Left/Right still move the cursor).
+                        .onPreviewKeyEvent { ev ->
+                            val dir = when (ev.key) {
+                                Key.DirectionDown -> FocusDirection.Down
+                                Key.DirectionUp -> FocusDirection.Up
+                                else -> null
+                            }
+                            if (dir == null || !keyEditing) return@onPreviewKeyEvent false
+                            if (ev.type == KeyEventType.KeyDown) {
+                                keyboard?.hide()
+                                if (dir == FocusDirection.Up) {
+                                    // Up: back onto the field's highlight, out of edit mode.
+                                    keyEditing = false
+                                    keyTextHadFocus = false
+                                    runCatching { keyWrapperFocus.requestFocus() }
+                                } else {
+                                    focusManager.moveFocus(dir)
+                                }
+                            }
+                            true
+                        }
+                        .onFocusChanged { if (!it.isFocused && keyEditing && keyTextHadFocus) {
+                            // Moved away (D-pad / Back) — leave edit mode.
+                            keyEditing = false
+                            keyTextHadFocus = false
+                        } else if (it.isFocused) keyTextHadFocus = true }
+                )
+            }
+            LaunchedEffect(keyEditing) {
+                if (keyEditing) {
+                    runCatching { keyTextFocus.requestFocus() }
+                    keyboard?.show()
+                }
+            }
             Row(
                 Modifier.padding(top = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)

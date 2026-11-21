@@ -1,12 +1,75 @@
+<!-- Android TV launcher banner (the tile you click on the home screen).
+     All vector: a few KB, no runtime cost. Layers, back to front:
+     dark gradient backdrop -> soft green glow -> glass disc + rim -> drop shadow ->
+     gradient play glyph (rounded corners via a round-joined stroke) -> highlight. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="320dp"
     android:height="180dp"
     android:viewportWidth="320"
     android:viewportHeight="180">
-    <path
-        android:fillColor="#101418"
-        android:pathData="M0,0h320v180h-320z" />
-    <path
-        android:fillColor="#3DDC97"
-        android:pathData="M132,64 L132,116 L178,90 Z" />
+
+    <!-- Backdrop: subtle top-to-bottom gradient -->
+    <path android:pathData="M0,0h320v180h-320z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear"
+                android:startX="0" android:startY="0" android:endX="0" android:endY="180"
+                android:startColor="#FF151B21" android:endColor="#FF07090C" />
+        </aapt:attr>
+    </path>
+
+    <!-- Wide ambient glow behind the disc -->
+    <path android:pathData="M160,90m-88,0a88,88 0,1 1,176 0a88,88 0,1 1,-176 0">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="radial"
+                android:centerX="160" android:centerY="90" android:gradientRadius="88">
+                <item android:offset="0" android:color="#663DDC97" />
+                <item android:offset="0.45" android:color="#223DDC97" />
+                <item android:offset="1" android:color="#003DDC97" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Glass disc -->
+    <path android:pathData="M160,90m-52,0a52,52 0,1 1,104 0a52,52 0,1 1,-104 0">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear"
+                android:startX="120" android:startY="45" android:endX="200" android:endY="135"
+                android:startColor="#FF1C2A25" android:endColor="#FF0B0F12" />
+        </aapt:attr>
+    </path>
+    <!-- Disc rim: bright at top-left, fading round the bottom -->
+    <path android:pathData="M160,90m-52,0a52,52 0,1 1,104 0a52,52 0,1 1,-104 0"
+        android:strokeWidth="2.5" android:fillColor="#00000000">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:type="linear"
+                android:startX="118" android:startY="42" android:endX="202" android:endY="138"
+                android:startColor="#CC5CF0B0" android:endColor="#223DDC97" />
+        </aapt:attr>
+    </path>
+
+    <!-- Play glyph shadow (depth) -->
+    <path android:pathData="M150,70 L150,114 L188,92 Z"
+        android:fillColor="#66000000" android:strokeColor="#66000000"
+        android:strokeWidth="8" android:strokeLineJoin="round" />
+
+    <!-- Play glyph: green gradient, corners rounded by a round-joined stroke -->
+    <path android:pathData="M148,67 L148,111 L186,89 Z"
+        android:strokeWidth="8" android:strokeLineJoin="round">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear"
+                android:startX="144" android:startY="62" android:endX="186" android:endY="112"
+                android:startColor="#FF7DF7C4" android:endColor="#FF1FA774" />
+        </aapt:attr>
+        <aapt:attr name="android:strokeColor">
+            <gradient android:type="linear"
+                android:startX="144" android:startY="62" android:endX="186" android:endY="112"
+                android:startColor="#FF7DF7C4" android:endColor="#FF1FA774" />
+        </aapt:attr>
+    </path>
+
+    <!-- Specular highlight along the glyph's upper edge -->
+    <path android:pathData="M150,70 L150,84 L172,79 Z"
+        android:fillColor="#33FFFFFF" android:strokeColor="#33FFFFFF"
+        android:strokeWidth="3" android:strokeLineJoin="round" />
 </vector>

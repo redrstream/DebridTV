@@ -233,6 +233,39 @@ class SimklClient(
         }
     }
 
+    // ---- Continue-Watching removal (push) ----------------------------------
+
+    /**
+     * The user removed a title from Continue Watching on this TV. SimKL has no
+     * "hide from Continue Watching" flag, so (per the user's choice) the title is moved
+     * to the "dropped" list and its saved resume points are deleted. Watched history is
+     * kept. Other TVs see the status change on their next sync and hide it too
+     * ([applyWatched]). [bareId] = "tt123"; [isSeries] picks shows vs movies.
+     */
+    fun fireDismiss(bareId: String, isSeries: Boolean) {
+        if (!bareId.startsWith("tt")) return
+        scope.launch {
+            pushMutex.withLock {
+                if (!active()) return@withLock
+                val token = validToken() ?: return@withLock
+                val auth = bearer(token)
+                val item = SimklListItem(to = "dropped", ids = SimklIds(imdb = bareId))
+                val body = if (isSeries) SimklListReq(shows = listOf(item)) else SimklListReq(movies = listOf(item))
+                sendWithLockRetry("removal (dropped)") { api.addToList(auth, body) }
+                // Clear any saved resume points for it so nothing drags it back.
+                val sessions = try {
+                    withContext(Dispatchers.IO) { api.playbackAll(auth) }
+                } catch (_: Exception) {
+                    return@withLock
+                }
+                sessions
+                    .filter { s -> (s.show ?: s.anime)?.ids?.imdb == bareId || s.movie?.ids?.imdb == bareId }
+                    .mapNotNull { it.id }
+                    .forEach { id -> runCatching { api.deletePlayback(auth, id) } }
+            }
+        }
+    }
+
     private fun historyBody(key: String): SimklHistoryReq? {
         if (!key.startsWith("tt")) return null
         val parts = key.split(":")
@@ -324,7 +357,10 @@ class SimklClient(
                 recordSync(false, "Watched history: ${describe(e)}", (e as? HttpException)?.code())
                 return if (e is IOException) SyncResult.RETRY else SyncResult.FAILED
             }
-            watchedCount = applyWatched(resp)
+            // Anything changed locally before this window started is older than the
+            // remote change that put the item in the delta.
+            val windowStart = parseIso(dateFrom) ?: now
+            watchedCount = applyWatched(resp, windowStart)
         }
         // 3. Resume points, only if playback moved. The list is small (SimKL keeps
         // paused sessions 7–90 days), so take it whole rather than a delta.
@@ -392,9 +428,26 @@ class SimklClient(
      * (impliedWatchedUpTo) and Continue Watching rolls to the next. Returns how many
      * entries changed.
      */
-    private suspend fun applyWatched(resp: SimklAllItems): Int {
+    private suspend fun applyWatched(resp: SimklAllItems, windowStart: Long): Int {
         var changed = 0
+        // Removed from Continue Watching on another TV (moved to "dropped"): hide it here
+        // too — unless it's been watched on THIS TV since the window began (then the
+        // local activity is newer than the removal and wins).
+        suspend fun applyDropped(bareId: String, isSeries: Boolean) {
+            val latest = history.latestUpdateFor(bareId) ?: return
+            if (latest >= windowStart) return
+            if (isSeries) history.removeShow(bareId) else history.remove(bareId)
+            changed++
+        }
+        // A drop with a watch AFTER the window began isn't a removal — the title was
+        // picked up again (possibly while still listed as dropped) — so treat it normally.
+        fun watchedRecently(lastWatchedAt: String?): Boolean =
+            (parseIso(lastWatchedAt) ?: 0L) >= windowStart
         for (mi in resp.movies) {
+            if (mi.status == "dropped" && !watchedRecently(mi.last_watched_at)) {
+                mi.movie?.ids?.imdb?.let { applyDropped(it, isSeries = false) }
+                continue
+            }
             // Only a completed movie is "watched"; an in-progress one arrives via playback.
             if (mi.status != null && mi.status != "completed") continue
             val imdb = mi.movie?.ids?.imdb ?: continue
@@ -408,6 +461,10 @@ class SimklClient(
         for (si in resp.shows + resp.anime) {
             val show = si.show ?: si.anime ?: continue
             val imdb = show.ids?.imdb ?: continue
+            if (si.status == "dropped" && !watchedRecently(si.last_watched_at)) {
+                applyDropped(imdb, isSeries = true)
+                continue
+            }
             val furthest = si.seasons
                 .flatMap { s ->
                     s.episodes.mapNotNull { ep ->

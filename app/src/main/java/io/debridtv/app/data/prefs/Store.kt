@@ -197,6 +197,13 @@ class HistoryStore(private val context: Context) {
 
     suspend fun get(key: String): HistoryEntry? = decode(current()).firstOrNull { it.key == key }
 
+    /** Newest local activity for a movie / show (any of its episode rows), or null if
+     *  there's nothing for it locally. [bareId] = "tt123". */
+    suspend fun latestUpdateFor(bareId: String): Long? =
+        decode(current())
+            .filter { it.key == bareId || it.key.startsWith("$bareId:") }
+            .maxOfOrNull { it.updatedAt }
+
     suspend fun upsert(entry: HistoryEntry) {
         context.dataStore.edit { prefs ->
             val list = decode(prefs[KEY_HISTORY]).toMutableList()

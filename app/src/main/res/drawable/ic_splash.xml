@@ -1,12 +1,33 @@
-<!-- Splash glyph: the green play triangle on transparent (the splash window
-     background supplies the dark backdrop). Centred in the 108 viewport so the
-     system's circular splash icon mask frames it cleanly. -->
+<!-- Splash glyph: soft green glow + gradient play triangle on transparent (the
+     splash window background supplies the dark backdrop). Kept inside the centre
+     of the 108 viewport so the system's circular splash mask frames it cleanly. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:fillColor="#3DDC97"
-        android:pathData="M42,34 L42,74 L78,54 Z" />
+
+    <path android:pathData="M54,54m-34,0a34,34 0,1 1,68 0a34,34 0,1 1,-68 0">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="radial"
+                android:centerX="54" android:centerY="54" android:gradientRadius="34">
+                <item android:offset="0" android:color="#553DDC97" />
+                <item android:offset="1" android:color="#003DDC97" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M47,41 L47,67 L70,54 Z"
+        android:strokeWidth="5" android:strokeLineJoin="round">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear"
+                android:startX="44" android:startY="38" android:endX="70" android:endY="68"
+                android:startColor="#FF7DF7C4" android:endColor="#FF1FA774" />
+        </aapt:attr>
+        <aapt:attr name="android:strokeColor">
+            <gradient android:type="linear"
+                android:startX="44" android:startY="38" android:endX="70" android:endY="68"
+                android:startColor="#FF7DF7C4" android:endColor="#FF1FA774" />
+        </aapt:attr>
+    </path>
 </vector>

@@ -3,6 +3,7 @@ package io.debridtv.app.data.simkl
 import kotlinx.serialization.Serializable
 import retrofit2.Response
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
@@ -89,6 +90,21 @@ interface SimklApi {
         @Body body: SimklHistoryReq
     ): Response<Unit>
 
+    /** Move titles to a watchlist status. Used to mark a title "dropped" when it's
+     *  removed from Continue Watching, so the other TVs hide it too. */
+    @POST("sync/add-to-list")
+    suspend fun addToList(
+        @Header("Authorization") auth: String,
+        @Body body: SimklListReq
+    ): Response<Unit>
+
+    /** Delete one saved resume point (ids come from [playbackAll]). */
+    @DELETE("sync/playback/{id}")
+    suspend fun deletePlayback(
+        @Header("Authorization") auth: String,
+        @Path("id") id: Long
+    ): Response<Unit>
+
     /** Remove movies / episodes from watched history ("Mark unwatched"). */
     @POST("sync/history/remove")
     suspend fun removeFromHistory(
@@ -96,6 +112,18 @@ interface SimklApi {
         @Body body: SimklHistoryReq
     ): Response<Unit>
 }
+
+// ---- Watchlist DTOs ----------------------------------------------------------
+
+@Serializable
+data class SimklListReq(
+    val movies: List<SimklListItem>? = null,
+    val shows: List<SimklListItem>? = null
+)
+
+/** `to` is per-item: watching / plantowatch / hold / dropped / completed. */
+@Serializable
+data class SimklListItem(val to: String, val ids: SimklIds)
 
 // ---- History DTOs ------------------------------------------------------------
 

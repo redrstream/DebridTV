@@ -388,6 +388,13 @@ fun HomeScreen(nav: NavHostController) {
                             // every episode entry; others remove their single entry.
                             if (target.type == "series") ServiceLocator.history.removeShow(target.id)
                             else ServiceLocator.history.remove(target.id)
+                            // With SimKL on, carry the removal to the other TVs (moves the
+                            // title to "dropped" + clears its resume points). No-op when
+                            // SimKL is off/not connected, or for Library (non-IMDb) items.
+                            ServiceLocator.simkl.fireDismiss(
+                                bareId = target.id.substringBefore(":"),
+                                isSeries = target.type == "series"
+                            )
                         }
                         removeTarget = null
                     }) { Text("Remove") }
